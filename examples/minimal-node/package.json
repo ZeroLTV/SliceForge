@@ -1,0 +1,10 @@
+{
+  "name": "minimal-node-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "echo 'Building project...' && exit 0",
+    "lint": "echo 'Linting project...' && exit 0",
+    "test:unit": "echo 'Running unit tests...' && exit 0"
+  }
+}

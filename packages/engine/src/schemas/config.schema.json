@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SliceForgeConfig",
+  "type": "object",
+  "properties": {
+    "project": { "type": "string" },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["cursor-cli", "claude-code", "api"] },
+        "model": { "type": "string" },
+        "timeoutMs": { "type": "integer" }
+      },
+      "required": ["type"]
+    },
+    "stack": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["node", "dotnet", "custom"] },
+        "api": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer" },
+            "healthPath": { "type": "string" }
+          },
+          "required": ["port", "healthPath"]
+        },
+        "web": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer" },
+            "healthPath": { "type": "string" }
+          },
+          "required": ["port", "healthPath"]
+        },
+        "db": {
+          "type": "object",
+          "properties": {
+            "compose": { "type": "string" },
+            "service": { "type": "string" }
+          },
+          "required": ["compose", "service"]
+        }
+      },
+      "required": ["type"]
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "object",
+          "properties": {
+            "build": { "type": "string" },
+            "lint": { "type": "string" },
+            "test": {
+              "type": "object",
+              "properties": {
+                "unit": { "type": "string" },
+                "integration": { "type": "string" },
+                "e2e": { "type": "string" }
+              }
+            }
+          },
+          "required": ["build", "test"]
+        },
+        "forbiddenPatterns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "pattern": { "type": "string" },
+              "paths": { "type": "array", "items": { "type": "string" } },
+              "message": { "type": "string" }
+            },
+            "required": ["id", "pattern", "paths", "message"]
+          }
+        }
+      },
+      "required": ["commands"]
+    },
+    "loop": {
+      "type": "object",
+      "properties": {
+        "maxIterations": { "type": "integer" },
+        "maxRetriesPerSlice": { "type": "integer" },
+        "requireHumanApproval": { "type": "array", "items": { "type": "string" } },
+        "browserTest": {
+          "type": "object",
+          "properties": {
+            "required": { "type": "boolean" },
+            "requirePreviewStack": { "type": "boolean" }
+          },
+          "required": ["required", "requirePreviewStack"]
+        },
+        "testCaseGate": { "type": "string", "enum": ["required", "warn", "skip"] }
+      },
+      "required": ["maxIterations", "maxRetriesPerSlice", "browserTest", "testCaseGate"]
+    },
+    "paths": {
+      "type": "object",
+      "properties": {
+        "backlog": { "type": "string" },
+        "testCases": { "type": "string" },
+        "guardrails": { "type": "string" },
+        "state": { "type": "string" },
+        "lock": { "type": "string" }
+      }
+    }
+  },
+  "required": ["project", "agent", "stack", "checks", "loop"]
+}

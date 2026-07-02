@@ -1,0 +1,23 @@
+{
+  "branchName": "master",
+  "slices": [
+    {
+      "id": "bootstrap-workspace",
+      "passes": false,
+      "priority": 1,
+      "description": "Create package structure, setup package.json scripts",
+      "completionArtifacts": ["src/index.js"],
+      "acceptance": ["AC-01"],
+      "docs": ["docs/spec-01.md"]
+    },
+    {
+      "id": "add-calculator-module",
+      "passes": false,
+      "priority": 2,
+      "description": "Add simple sum calculator function and associated unit tests",
+      "completionArtifacts": ["src/calc.js", "tests/calc.test.js"],
+      "acceptance": ["AC-02"],
+      "docs": ["docs/spec-02.md"]
+    }
+  ]
+}
