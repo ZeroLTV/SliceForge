@@ -3,13 +3,20 @@ import * as fs from "fs";
 import * as path from "path";
 import { logger } from "./logger.js";
 
-export function loadAndValidateSecrets(projectRoot: string, agentType: "cursor-cli" | "claude-code" | "api"): Record<string, string> {
+type AgentType = "cursor-cli" | "claude-code" | "api";
+
+export function loadAndValidateSecrets(
+  projectRoot: string,
+  agentType: AgentType,
+): Record<string, string> {
   const envPath = path.join(projectRoot, ".env");
   if (fs.existsSync(envPath)) {
     logger.debug(`Loading .env from ${envPath}`);
     dotenv.config({ path: envPath });
   } else {
-    logger.warn(`No .env file found at ${envPath}. Using existing process environment.`);
+    logger.warn(
+      `No .env file found at ${envPath}. Using existing process environment.`,
+    );
   }
 
   const secrets: Record<string, string> = {};
@@ -23,9 +30,7 @@ export function loadAndValidateSecrets(projectRoot: string, agentType: "cursor-c
     secrets[key] = value;
   };
 
-  // Agent-specific validation
   if (agentType === "api") {
-    // Direct API needs either ANTHROPIC_API_KEY or OPENAI_API_KEY
     const anthropic = process.env.ANTHROPIC_API_KEY || "";
     const openai = process.env.OPENAI_API_KEY || "";
     if (!anthropic && !openai) {
@@ -34,9 +39,9 @@ export function loadAndValidateSecrets(projectRoot: string, agentType: "cursor-c
     secrets["ANTHROPIC_API_KEY"] = anthropic;
     secrets["OPENAI_API_KEY"] = openai;
   } else if (agentType === "cursor-cli") {
-    checkKey("CURSOR_CLI_PATH", false); // Optional, default is just 'cursor'
+    checkKey("CURSOR_CLI_PATH", false);
   } else if (agentType === "claude-code") {
-    checkKey("CLAUDE_CODE_PATH", false); // Optional, default is just 'claude'
+    checkKey("CLAUDE_CODE_PATH", false);
   }
 
   if (missingKeys.length > 0) {

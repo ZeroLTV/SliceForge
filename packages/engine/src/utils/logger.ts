@@ -18,18 +18,10 @@ class Logger {
       fs.mkdirSync(dir, { recursive: true });
     }
     this.logFilePath = filePath;
-    // Clear or initialize log file
-    fs.writeFileSync(filePath, `--- SliceForge Log Started: ${new Date().toISOString()} ---\n`);
-  }
-
-  private writeToFile(level: LogLevel, message: string) {
-    if (!this.logFilePath) return;
-    try {
-      const timestamp = new Date().toISOString();
-      fs.appendFileSync(this.logFilePath, `[${timestamp}] [${level}] ${message}\n`);
-    } catch (_err) {
-      // Ignore write errors to logger file
-    }
+    fs.writeFileSync(
+      filePath,
+      `--- SliceForge Log Started: ${new Date().toISOString()} ---\n`,
+    );
   }
 
   public info(msg: string) {
@@ -53,21 +45,36 @@ class Logger {
   }
 
   public debug(msg: string) {
+    this.writeToFile(LogLevel.DEBUG, msg);
     if (process.env.DEBUG) {
       console.log(`\x1b[90m[DEBUG]\x1b[0m ${msg}`);
-      this.writeToFile(LogLevel.DEBUG, msg);
     }
   }
 
   public section(title: string) {
     const separator = "=".repeat(60);
-    console.log(`\n\x1b[1;35m${separator}\n=== ${title}\n${separator}\x1b[0m\n`);
+    console.log(
+      `\n\x1b[1;35m${separator}\n=== ${title}\n${separator}\x1b[0m\n`,
+    );
     this.writeToFile(LogLevel.INFO, `SECTION: ${title}`);
   }
 
   public step(name: string) {
     console.log(`\n\x1b[1;34m--> Step: ${name}\x1b[0m`);
     this.writeToFile(LogLevel.INFO, `STEP: ${name}`);
+  }
+
+  private writeToFile(level: LogLevel, message: string) {
+    if (!this.logFilePath) return;
+    try {
+      const timestamp = new Date().toISOString();
+      fs.appendFileSync(
+        this.logFilePath,
+        `[${timestamp}] [${level}] ${message}\n`,
+      );
+    } catch {
+      // Silently ignore write errors to log file
+    }
   }
 }
 

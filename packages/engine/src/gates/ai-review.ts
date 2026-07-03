@@ -1,11 +1,10 @@
 import { Slice } from "../core/backlog.js";
 import { SliceForgeConfig } from "../core/config.js";
-import { AgentAdapter } from "../agents/base-agent.js";
+import { AgentAdapter, AgentSignal } from "../agents/base-agent.js";
 import { buildPrompt } from "../core/prompt-builder.js";
 import { getDiff, getChangedFiles } from "../utils/git.js";
 import { logger } from "../utils/logger.js";
-import * as path from "path";
-import * as fs from "fs";
+import { resolveTemplatePath, ensureTemplateExists } from "../utils/template-resolver.js";
 
 export async function runAiReviewGate(
   slice: Slice,
@@ -17,24 +16,18 @@ export async function runAiReviewGate(
 ): Promise<{ pass: boolean; log: string }> {
   logger.step(`Running AI Code Review gate for slice ${slice.id}`);
 
-  const templatePath = path.join(projectRoot, "packages/engine/templates/reviewer.md");
-  const fallbackTemplatePath = path.join(projectRoot, "templates/reviewer.md");
-  const actualTemplatePath = fs.existsSync(templatePath) ? templatePath : fallbackTemplatePath;
+  const templatePath = resolveTemplatePath(projectRoot, "reviewer");
+  ensureTemplateExists(
+    templatePath,
+    "# Reviewer Agent\n\nReview changes for slice: {{SLICE_ID}}.\nExpect signal: REVIEW_PASS\n",
+  );
 
-  if (!fs.existsSync(actualTemplatePath)) {
-    fs.mkdirSync(path.dirname(actualTemplatePath), { recursive: true });
-    fs.writeFileSync(
-      actualTemplatePath,
-      "# Reviewer Agent\n\nReview changes for slice: {{SLICE_ID}}.\nExpect signal: REVIEW_PASS\n",
-      "utf8",
-    );
-  }
-
-  // Gather diff and changed files list
   const diffContext = await getDiff(projectRoot);
-  const changedFilesList = (await getChangedFiles(projectRoot)).map(f => `- ${f}`).join("\n");
+  const changedFilesList = (await getChangedFiles(projectRoot))
+    .map((f) => `- ${f}`)
+    .join("\n");
 
-  const prompt = buildPrompt(actualTemplatePath, {
+  const prompt = buildPrompt(templatePath, {
     SLICE_ID: slice.id,
     DIFF_CONTEXT: diffContext,
     CHANGED_FILES: changedFilesList || "(No files changed)",
@@ -49,15 +42,14 @@ export async function runAiReviewGate(
     model: config.agent.model,
   });
 
-  const pass = result.signal === "REVIEW_PASS";
+  const pass = result.signal === AgentSignal.REVIEW_PASS;
   if (pass) {
     logger.success("AI Code Review gate passed.");
   } else {
-    logger.error(`AI Code Review gate failed. Agent signal: ${result.signal}`);
+    logger.error(
+      `AI Code Review gate failed. Agent signal: ${result.signal}`,
+    );
   }
 
-  return {
-    pass,
-    log: result.output,
-  };
+  return { pass, log: result.output };
 }

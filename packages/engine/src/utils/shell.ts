@@ -1,4 +1,4 @@
-import { exec, spawn, execSync, ChildProcess } from "child_process";
+import { exec, execSync, spawn, type ChildProcess } from "child_process";
 import { logger } from "./logger.js";
 
 export interface ShellOptions {
@@ -21,38 +21,37 @@ export function killProcess(child: ChildProcess): void {
     } else {
       process.kill(child.pid, "SIGTERM");
     }
-  } catch (err: any) {
-    logger.warn(`Failed to kill process ${child.pid}: ${err.message}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn(`Failed to kill process ${child.pid}: ${message}`);
   }
 }
 
-export function execCommand(command: string, options: ShellOptions = {}): Promise<ShellResult> {
+export function execCommand(
+  command: string,
+  options: ShellOptions = {},
+): Promise<ShellResult> {
   const cwd = options.cwd || process.cwd();
   const env = { ...process.env, ...(options.env || {}) };
-  const timeout = options.timeoutMs || 0; // 0 means no timeout
+  const timeout = options.timeoutMs || 0;
 
   return new Promise((resolve) => {
     logger.debug(`Executing command: "${command}" in CWD: ${cwd}`);
-    const child = exec(command, { cwd, env, timeout }, (error, stdout, stderr) => {
-      const exitCode = error ? (typeof error.code === "number" ? error.code : 1) : 0;
+    exec(command, { cwd, env, timeout }, (error, stdout, stderr) => {
+      const exitCode = error
+        ? typeof error.code === "number"
+          ? error.code
+          : 1
+        : 0;
       resolve({
         stdout: stdout.toString(),
         stderr: stderr.toString(),
         exitCode,
       });
     });
-
-    if (timeout > 0) {
-      child.on("timeout", () => {
-        logger.error(`Command timed out after ${timeout}ms: "${command}"`);
-      });
-    }
   });
 }
 
-/**
- * Runs a command interactively or streams outputs
- */
 export function spawnCommand(
   command: string,
   args: string[],
@@ -64,12 +63,12 @@ export function spawnCommand(
 
   return new Promise((resolve) => {
     logger.debug(`Spawning command: "${command} ${args.join(" ")}" in CWD: ${cwd}`);
-    const child = spawn(command, args, { cwd, env, shell: true });
+    const child = spawn(command, args, { cwd, env, shell: false });
 
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (data) => {
+    child.stdout.on("data", (data: Buffer) => {
       const chunk = data.toString();
       stdout += chunk;
       if (process.env.DEBUG) {
@@ -77,7 +76,7 @@ export function spawnCommand(
       }
     });
 
-    child.stderr.on("data", (data) => {
+    child.stderr.on("data", (data: Buffer) => {
       const chunk = data.toString();
       stderr += chunk;
       if (process.env.DEBUG) {
@@ -93,7 +92,7 @@ export function spawnCommand(
       }, timeout);
     }
 
-    child.on("close", (code) => {
+    child.on("close", (code: number | null) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
       }
@@ -104,11 +103,13 @@ export function spawnCommand(
       });
     });
 
-    child.on("error", (err) => {
+    child.on("error", (err: Error) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
       }
-      logger.error(`Failed to start command: "${command}". Error: ${err.message}`);
+      logger.error(
+        `Failed to start command: "${command}". Error: ${err.message}`,
+      );
       resolve({
         stdout,
         stderr: stderr + `\nError starting process: ${err.message}`,

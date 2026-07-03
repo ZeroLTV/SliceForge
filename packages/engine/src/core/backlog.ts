@@ -1,22 +1,11 @@
 import * as fs from "fs";
-import Ajv from "ajv";
-
-import * as path from "path";
-import { fileURLToPath } from "url";
+import type { ValidateFunction } from "ajv";
 import { logger } from "../utils/logger.js";
+import { BacklogValidationError } from "../utils/errors.js";
+import { loadSchema, createValidator } from "../utils/schema-loader.js";
 
-let backlogSchema: any;
-try {
-  // CommonJS fallback (like Jest testing)
-  backlogSchema = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "../schemas/backlog.schema.json"), "utf8")
-  );
-} catch (_err) {
-  // ESM Production mode
-  const currentUrl = new Function("return import.meta.url")();
-  const schemaPath = fileURLToPath(new URL("../schemas/backlog.schema.json", currentUrl));
-  backlogSchema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
-}
+const schema = loadSchema("../schemas/backlog.schema.json");
+const validateFn: ValidateFunction = createValidator(schema);
 
 export interface Slice {
   id: string;
@@ -42,30 +31,28 @@ export interface Backlog {
   slices: Slice[];
 }
 
-const ajv = new (Ajv as any)({ allErrors: true });
-const validateFn = ajv.compile(backlogSchema);
-
 export function loadBacklog(backlogPath: string): Backlog {
   if (!fs.existsSync(backlogPath)) {
-    throw new Error(`Backlog file not found: ${backlogPath}`);
+    throw new BacklogValidationError(`Backlog file not found: ${backlogPath}`, { backlogPath });
   }
 
-  let backlog: any;
+  let backlog: unknown;
   try {
     const rawData = fs.readFileSync(backlogPath, "utf8");
     backlog = JSON.parse(rawData);
-  } catch (err: any) {
-    throw new Error(`Failed to parse backlog JSON: ${err.message}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new BacklogValidationError(`Failed to parse backlog JSON: ${message}`, { backlogPath });
   }
 
   const valid = validateFn(backlog);
   if (!valid) {
     const errors = validateFn.errors
-      ? validateFn.errors.map((e: any) => `${e.instancePath} ${e.message}`).join(", ")
+      ? validateFn.errors.map((e) => `${e.instancePath || "/"} ${e.message}`).join(", ")
       : "Unknown validation error";
     const errorMsg = `Backlog validation failed: ${errors}`;
     logger.error(errorMsg);
-    throw new Error(errorMsg);
+    throw new BacklogValidationError(errorMsg, { errors: validateFn.errors });
   }
 
   return backlog as Backlog;
@@ -75,8 +62,9 @@ export function saveBacklog(backlogPath: string, backlog: Backlog): void {
   try {
     const data = JSON.stringify(backlog, null, 2);
     fs.writeFileSync(backlogPath, data, "utf8");
-  } catch (err: any) {
-    throw new Error(`Failed to save backlog JSON: ${err.message}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new BacklogValidationError(`Failed to save backlog JSON: ${message}`, { backlogPath });
   }
 }
 
@@ -86,7 +74,6 @@ export function pickNextSlice(backlog: Backlog): Slice | null {
     return null;
   }
 
-  // Sort by priority first (ascending), then phase if present
   return pendingSlices.sort((a, b) => {
     if (a.priority !== b.priority) {
       return a.priority - b.priority;

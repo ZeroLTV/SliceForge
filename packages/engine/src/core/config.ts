@@ -1,22 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
-import Ajv from "ajv";
+import type { ValidateFunction } from "ajv";
 import { logger } from "../utils/logger.js";
+import { ConfigValidationError, ConfigurationNotFoundError } from "../utils/errors.js";
+import { loadSchema, createValidator } from "../utils/schema-loader.js";
 
-import { fileURLToPath } from "url";
-
-let schemaJson: any;
-try {
-  // CommonJS fallback (like Jest testing)
-  schemaJson = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "../schemas/config.schema.json"), "utf8")
-  );
-} catch (_err) {
-  // ESM Production mode
-  const currentUrl = new Function("return import.meta.url")();
-  const schemaPath = fileURLToPath(new URL("../schemas/config.schema.json", currentUrl));
-  schemaJson = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
-}
+const schema = loadSchema("../schemas/config.schema.json");
+const validateFn: ValidateFunction = createValidator(schema);
 
 export interface SliceForgeConfig {
   project: string;
@@ -63,45 +53,51 @@ export interface SliceForgeConfig {
   };
 }
 
-const ajv = new (Ajv as any)({ allErrors: true });
-const validateFn = ajv.compile(schemaJson);
+interface RawConfig {
+  project?: unknown;
+  agent?: unknown;
+  stack?: unknown;
+  checks?: unknown;
+  loop?: unknown;
+  paths?: Record<string, unknown>;
+}
 
 export function loadConfig(projectRoot: string): SliceForgeConfig {
   const configPath = path.join(projectRoot, "sliceforge.config.json");
   if (!fs.existsSync(configPath)) {
-    throw new Error(`Configuration file not found: ${configPath}`);
+    throw new ConfigurationNotFoundError(configPath);
   }
 
-  let rawConfig: any;
+  let rawConfig: RawConfig;
   try {
     const rawData = fs.readFileSync(configPath, "utf8");
-    rawConfig = JSON.parse(rawData);
-  } catch (err: any) {
-    throw new Error(`Failed to parse sliceforge.config.json: ${err.message}`);
+    rawConfig = JSON.parse(rawData) as RawConfig;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new ConfigValidationError(`Failed to parse sliceforge.config.json: ${message}`, { configPath });
   }
 
-  // Populate default paths if not present
   if (!rawConfig.paths) {
     rawConfig.paths = {};
   }
   rawConfig.paths = {
-    backlog: rawConfig.paths.backlog || "whole-app-backlog.json",
-    testCases: rawConfig.paths.testCases || "docs/test-cases/items",
-    guardrails: rawConfig.paths.guardrails || "docs/guardrails.md",
-    state: rawConfig.paths.state || ".sliceforge-state.json",
-    lock: rawConfig.paths.lock || ".sliceforge.lock",
+    backlog: "whole-app-backlog.json",
+    testCases: "docs/test-cases/items",
+    guardrails: "docs/guardrails.md",
+    state: ".sliceforge-state.json",
+    lock: ".sliceforge.lock",
     ...rawConfig.paths,
   };
 
   const valid = validateFn(rawConfig);
   if (!valid) {
     const errors = validateFn.errors
-      ? validateFn.errors.map((e: any) => `${e.instancePath} ${e.message}`).join(", ")
+      ? validateFn.errors.map((e) => `${e.instancePath || "/"} ${e.message}`).join(", ")
       : "Unknown validation error";
     const errorMsg = `Configuration validation failed: ${errors}`;
     logger.error(errorMsg);
-    throw new Error(errorMsg);
+    throw new ConfigValidationError(errorMsg, { errors: validateFn.errors });
   }
 
-  return rawConfig as SliceForgeConfig;
+  return rawConfig as unknown as SliceForgeConfig;
 }

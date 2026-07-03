@@ -1,3 +1,10 @@
+export enum AgentSignal {
+  SLICE_DONE = "SLICE_DONE",
+  BROWSER_TEST_PASS = "BROWSER_TEST_PASS",
+  REVIEW_PASS = "REVIEW_PASS",
+  ERROR = "ERROR",
+}
+
 export interface AgentRunOptions {
   cwd: string;
   timeoutMs?: number;
@@ -6,7 +13,7 @@ export interface AgentRunOptions {
 }
 
 export interface AgentResult {
-  signal: string; // 'SLICE_DONE' | 'BROWSER_TEST_PASS' | 'REVIEW_PASS' | 'ERROR'
+  signal: AgentSignal;
   output: string;
   exitCode: number;
   usage?: {
@@ -18,4 +25,11 @@ export interface AgentResult {
 
 export interface AgentAdapter {
   run(prompt: string, options: AgentRunOptions): Promise<AgentResult>;
+}
+
+export function parseAgentSignal(output: string): AgentSignal {
+  if (output.includes("SLICE_DONE")) return AgentSignal.SLICE_DONE;
+  if (output.includes("BROWSER_TEST_PASS")) return AgentSignal.BROWSER_TEST_PASS;
+  if (output.includes("REVIEW_PASS")) return AgentSignal.REVIEW_PASS;
+  return AgentSignal.ERROR;
 }

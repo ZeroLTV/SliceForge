@@ -1,27 +1,57 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { runRalphLoop } from "../../src/core/ralph-runner.js";
 import { SliceForgeConfig } from "../../src/core/config.js";
 import * as fs from "fs";
 import * as path from "path";
 
 jest.mock("fs", () => {
-  const actualFs: any = jest.requireActual("fs");
+  const actualFs = jest.requireActual("fs") as typeof fs;
   return {
     ...actualFs,
     writeFileSync: jest.fn(),
     unlinkSync: jest.fn(),
-    existsSync: jest.fn((p: any) => {
-      if (typeof p === "string" && (p.includes("implementer.md") || p.includes("reviewer.md") || p.includes("tester.md"))) {
+    appendFileSync: jest.fn(),
+    existsSync: jest.fn((p: fs.PathLike) => {
+      const pathStr = p.toString();
+      if (
+        pathStr.includes("implementer.md") ||
+        pathStr.includes("reviewer.md") ||
+        pathStr.includes("tester.md") ||
+        pathStr.includes("testgen.md") ||
+        pathStr.includes("backlog.json") ||
+        pathStr.includes("state.json") ||
+        pathStr.includes("guardrails.md") ||
+        pathStr.includes("lock")
+      ) {
         return true;
       }
       return actualFs.existsSync(p);
     }),
-    readFileSync: jest.fn((p: any, options: any) => {
-      if (typeof p === "string" && (p.includes("implementer.md") || p.includes("reviewer.md") || p.includes("tester.md"))) {
-        return "Mock template content {{SLICE_ID}} {{DIFF_CONTEXT}} {{CHANGED_FILES}} {{CHECKS_SUMMARY}} {{BROWSER_TEST_SUMMARY}}";
+    readFileSync: jest.fn((p: fs.PathOrFileDescriptor, options: any) => {
+      const pathStr = typeof p === "string" ? p : String(p);
+      if (
+        pathStr.includes("implementer.md") ||
+        pathStr.includes("reviewer.md") ||
+        pathStr.includes("tester.md") ||
+        pathStr.includes("testgen.md")
+      ) {
+        return "Mock template content {{SLICE_ID}} {{DIFF_CONTEXT}} {{CHANGED_FILES}} {{CHECKS_SUMMARY}} {{BROWSER_TEST_SUMMARY}} {{SLICE_DESCRIPTION}} {{DOCS_LIST}} {{ACCEPTANCE_TAGS}} {{PRIOR_FAILURES}} {{COMPLETION_ARTIFACTS}}";
+      }
+      if (pathStr.includes("backlog.json")) {
+        return JSON.stringify({
+          slices: [
+            {
+              id: "slice-1",
+              passes: false,
+              priority: 1,
+              description: "Mock slice description",
+              completionArtifacts: [],
+            },
+          ],
+        });
       }
       return actualFs.readFileSync(p, options);
     }),
+    mkdirSync: jest.fn(),
   };
 });
 
@@ -42,63 +72,66 @@ jest.mock("../../src/utils/git.js", () => ({
   getDiff: jest.fn().mockResolvedValue(""),
 }));
 
-jest.mock("../../src/core/backlog.js", () => {
-  const original = jest.requireActual("../../src/core/backlog.js");
-  return {
-    ...original,
-    loadBacklog: jest.fn().mockReturnValue({
-      slices: [
-        {
-          id: "slice-1",
-          passes: false,
-          priority: 1,
-          description: "Mock slice description",
-          completionArtifacts: [],
-        },
-      ],
-    }),
-    saveBacklog: jest.fn(),
-  };
-});
-
 jest.mock("../../src/core/state.js", () => {
-  const original = jest.requireActual("../../src/core/state.js");
+  const original = jest.requireActual("../../src/core/state.js") as object;
   return {
     ...original,
     loadState: jest.fn().mockReturnValue({
       currentSliceId: "",
-      status: "running",
+      status: "running" as const,
       retriesPerSlice: {},
       gatesCompleted: [],
       costAccumulated: { inputTokens: 0, outputTokens: 0 },
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     }),
     saveState: jest.fn(),
     clearState: jest.fn(),
   };
 });
 
-// Mock agent to return success signal
-jest.mock("../../src/core/ralph-runner.js", () => {
-  const actual = jest.requireActual("../../src/core/ralph-runner.js");
-  return {
-    ...actual,
-    getAgentAdapter: jest.fn().mockReturnValue({
-      run: jest.fn().mockResolvedValue({
-        signal: "SLICE_DONE",
-        output: "Agent finished successfully",
-        exitCode: 0,
-      }),
+jest.mock("../../src/agents/claude-code-agent.js", () => ({
+  ClaudeCodeAgent: jest.fn().mockImplementation(() => ({
+    run: jest.fn().mockResolvedValue({
+      signal: "SLICE_DONE",
+      output: "Agent finished successfully",
+      exitCode: 0,
     }),
-    getStackAdapter: jest.fn().mockReturnValue({
-      build: jest.fn().mockResolvedValue({ stdout: "Build passed", stderr: "", exitCode: 0 }),
-      lint: jest.fn().mockResolvedValue({ stdout: "Lint passed", stderr: "", exitCode: 0 }),
-      test: jest.fn().mockResolvedValue({ stdout: "Tests passed", stderr: "", exitCode: 0 }),
-      startPreview: jest.fn().mockResolvedValue(undefined),
-      stopPreview: jest.fn().mockResolvedValue(undefined),
-      healthCheck: jest.fn().mockResolvedValue(true),
+  })),
+}));
+
+jest.mock("../../src/agents/api-agent.js", () => ({
+  ApiAgent: jest.fn().mockImplementation(() => ({
+    run: jest.fn().mockResolvedValue({
+      signal: "SLICE_DONE",
+      output: "Agent finished successfully",
+      exitCode: 0,
     }),
-  };
-});
+  })),
+}));
+
+jest.mock("../../src/adapters/node-adapter.js", () => ({
+  NodeAdapter: jest.fn().mockImplementation(() => ({
+    build: jest.fn().mockResolvedValue({
+      stdout: "Build passed",
+      stderr: "",
+      exitCode: 0,
+    }),
+    lint: jest.fn().mockResolvedValue({
+      stdout: "Lint passed",
+      stderr: "",
+      exitCode: 0,
+    }),
+    test: jest.fn().mockResolvedValue({
+      stdout: "Tests passed",
+      stderr: "",
+      exitCode: 0,
+    }),
+    startPreview: jest.fn().mockResolvedValue(undefined),
+    stopPreview: jest.fn().mockResolvedValue(undefined),
+    healthCheck: jest.fn().mockResolvedValue(true),
+  })),
+}));
 
 describe("ralph runner loop integration", () => {
   const mockConfig: SliceForgeConfig = {
@@ -136,7 +169,9 @@ describe("ralph runner loop integration", () => {
   };
 
   it("should successfully run loop, implement, and pass all gates", async () => {
-    // Run loop once
-    await expect(runRalphLoop(mockConfig, "/mock/project", true)).resolves.not.toThrow();
+    const { runRalphLoop } = await import("../../src/core/ralph-runner.js");
+    await expect(
+      runRalphLoop(mockConfig, "/mock/project", true),
+    ).resolves.not.toThrow();
   });
 });

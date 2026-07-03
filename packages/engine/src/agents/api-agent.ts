@@ -1,12 +1,23 @@
-import { AgentAdapter, AgentResult, AgentRunOptions } from "./base-agent.js";
+import { AgentAdapter, AgentResult, AgentRunOptions, AgentSignal, parseAgentSignal } from "./base-agent.js";
 import { logger } from "../utils/logger.js";
+import { AgentExecutionError } from "../utils/errors.js";
+
+interface AnthropicMessageResponse {
+  content: Array<{ text: string }>;
+  usage?: { input_tokens: number; output_tokens: number };
+}
+
+interface OpenAICompletionResponse {
+  choices: Array<{ message: { content: string } }>;
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}
 
 export class ApiAgent implements AgentAdapter {
   public async run(prompt: string, options: AgentRunOptions): Promise<AgentResult> {
     const apiKey = options.apiKey || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return {
-        signal: "ERROR",
+        signal: AgentSignal.ERROR,
         output: "API Key is missing. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.",
         exitCode: -1,
       };
@@ -39,10 +50,10 @@ export class ApiAgent implements AgentAdapter {
 
         if (!res.ok) {
           const errText = await res.text();
-          throw new Error(`Anthropic API error (${res.status}): ${errText}`);
+          throw new AgentExecutionError(`Anthropic API error (${res.status}): ${errText}`, { status: res.status });
         }
 
-        const data: any = await res.json();
+        const data = (await res.json()) as AnthropicMessageResponse;
         textResponse = data.content[0].text;
         inputTokens = data.usage?.input_tokens || Math.round(prompt.length / 4);
         outputTokens = data.usage?.output_tokens || Math.round(textResponse.length / 4);
@@ -62,20 +73,16 @@ export class ApiAgent implements AgentAdapter {
 
         if (!res.ok) {
           const errText = await res.text();
-          throw new Error(`OpenAI API error (${res.status}): ${errText}`);
+          throw new AgentExecutionError(`OpenAI API error (${res.status}): ${errText}`, { status: res.status });
         }
 
-        const data: any = await res.json();
+        const data = (await res.json()) as OpenAICompletionResponse;
         textResponse = data.choices[0].message.content;
         inputTokens = data.usage?.prompt_tokens || Math.round(prompt.length / 4);
         outputTokens = data.usage?.completion_tokens || Math.round(textResponse.length / 4);
       }
 
-      const signal = this.parseSignal(textResponse);
-      
-      // Calculate cost estimate ($15/MTok input, $75/MTok output for Sonnet 3.5 roughly)
-      const inputCost = (inputTokens / 1_000_000) * 3;
-      const outputCost = (outputTokens / 1_000_000) * 15;
+      const signal = parseAgentSignal(textResponse);
 
       return {
         signal,
@@ -84,23 +91,23 @@ export class ApiAgent implements AgentAdapter {
         usage: {
           inputTokens,
           outputTokens,
-          estimatedCostUSD: parseFloat((inputCost + outputCost).toFixed(5)),
+          estimatedCostUSD: estimateCost(inputTokens, outputTokens),
         },
       };
-    } catch (err: any) {
-      logger.error(`Direct API agent error: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`Direct API agent error: ${message}`);
       return {
-        signal: "ERROR",
-        output: `Direct API call failed: ${err.message}`,
+        signal: AgentSignal.ERROR,
+        output: `Direct API call failed: ${message}`,
         exitCode: -1,
       };
     }
   }
+}
 
-  private parseSignal(output: string): string {
-    if (output.includes("SLICE_DONE")) return "SLICE_DONE";
-    if (output.includes("BROWSER_TEST_PASS")) return "BROWSER_TEST_PASS";
-    if (output.includes("REVIEW_PASS")) return "REVIEW_PASS";
-    return "ERROR";
-  }
+function estimateCost(inputTokens: number, outputTokens: number): number {
+  const inputCost = (inputTokens / 1_000_000) * 3;
+  const outputCost = (outputTokens / 1_000_000) * 15;
+  return parseFloat((inputCost + outputCost).toFixed(5));
 }

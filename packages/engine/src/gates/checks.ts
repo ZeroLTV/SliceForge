@@ -6,7 +6,12 @@ import { StackAdapter } from "../adapters/base-adapter.js";
 import { logger } from "../utils/logger.js";
 
 export interface CheckFailure {
-  type: "forbidden_pattern" | "missing_artifact" | "build_error" | "lint_error" | "test_error";
+  type:
+    | "forbidden_pattern"
+    | "missing_artifact"
+    | "build_error"
+    | "lint_error"
+    | "test_error";
   message: string;
   details?: string;
 }
@@ -21,14 +26,15 @@ export async function runComputationalChecks(
 
   logger.step("Running computational checks");
 
-  // 1. Forbidden Patterns
   const forbiddenPatterns = config.checks.forbiddenPatterns || [];
   for (const rule of forbiddenPatterns) {
     logger.debug(`Checking forbidden pattern rule: ${rule.id}`);
     const regex = new RegExp(rule.pattern);
 
     for (const searchPath of rule.paths) {
-      const fullPath = path.isAbsolute(searchPath) ? searchPath : path.join(projectRoot, searchPath);
+      const fullPath = path.isAbsolute(searchPath)
+        ? searchPath
+        : path.join(projectRoot, searchPath);
       if (!fs.existsSync(fullPath)) continue;
 
       const checkFileOrDir = (targetPath: string) => {
@@ -39,14 +45,22 @@ export async function runComputationalChecks(
             checkFileOrDir(path.join(targetPath, file));
           }
         } else if (stat.isFile()) {
-          const content = fs.readFileSync(targetPath, "utf8");
-          if (regex.test(content)) {
-            logger.warn(`Forbidden pattern [${rule.id}] matches in ${targetPath}`);
-            failures.push({
-              type: "forbidden_pattern",
-              message: `Forbidden pattern matched: ${rule.message}`,
-              details: `File: ${path.relative(projectRoot, targetPath)} (Rule: ${rule.id})`,
-            });
+          try {
+            const content = fs.readFileSync(targetPath, "utf8");
+            if (regex.test(content)) {
+              logger.warn(
+                `Forbidden pattern [${rule.id}] matches in ${targetPath}`,
+              );
+              failures.push({
+                type: "forbidden_pattern",
+                message: `Forbidden pattern matched: ${rule.message}`,
+                details: `File: ${path.relative(projectRoot, targetPath)} (Rule: ${rule.id})`,
+              });
+            }
+          } catch (err) {
+            logger.warn(
+              `Could not read file for pattern check: ${targetPath} — ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
       };
@@ -55,10 +69,11 @@ export async function runComputationalChecks(
     }
   }
 
-  // 2. Completion Artifacts
   const artifacts = slice.completionArtifacts || [];
   for (const artifact of artifacts) {
-    const absolutePath = path.isAbsolute(artifact) ? artifact : path.join(projectRoot, artifact);
+    const absolutePath = path.isAbsolute(artifact)
+      ? artifact
+      : path.join(projectRoot, artifact);
     if (!fs.existsSync(absolutePath)) {
       logger.warn(`Missing completion artifact: ${artifact}`);
       failures.push({
@@ -68,7 +83,6 @@ export async function runComputationalChecks(
     }
   }
 
-  // 3. Build & Typecheck
   logger.info("Running build/typecheck command...");
   const buildResult = await stackAdapter.build();
   if (buildResult.exitCode !== 0) {
@@ -80,7 +94,6 @@ export async function runComputationalChecks(
     });
   }
 
-  // 4. Lint check
   logger.info("Running lint command...");
   const lintResult = await stackAdapter.lint();
   if (lintResult.exitCode !== 0) {
@@ -92,7 +105,6 @@ export async function runComputationalChecks(
     });
   }
 
-  // 5. Unit Tests
   const unitTests = slice.testRequirements?.unit || [];
   if (unitTests.length > 0 || config.checks.commands.test.unit) {
     logger.info("Running unit tests...");
@@ -107,7 +119,6 @@ export async function runComputationalChecks(
     }
   }
 
-  // 6. Integration Tests
   const intTests = slice.testRequirements?.integration || [];
   if (intTests.length > 0 || config.checks.commands.test.integration) {
     logger.info("Running integration tests...");

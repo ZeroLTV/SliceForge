@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { AgentAdapter, AgentResult, AgentRunOptions } from "./base-agent.js";
+import { AgentAdapter, AgentResult, AgentRunOptions, AgentSignal, parseAgentSignal } from "./base-agent.js";
 import { spawnCommand } from "../utils/shell.js";
 import { logger } from "../utils/logger.js";
 
@@ -16,7 +16,6 @@ export class CursorCliAgent implements AgentAdapter {
     fs.writeFileSync(promptPath, prompt, "utf8");
     logger.debug(`Saved agent prompt to ${promptPath}`);
 
-    // In Cursor CLI, we run: cursor --prompt-file <path> --force
     const args = ["--prompt-file", ".sliceforge-prompt.md", "--force"];
     logger.info(`Starting Cursor CLI agent process: ${this.cliPath} ${args.join(" ")}`);
 
@@ -26,33 +25,28 @@ export class CursorCliAgent implements AgentAdapter {
         timeoutMs: options.timeoutMs,
       });
 
-      // Cleanup prompt file
-      if (fs.existsSync(promptPath)) {
-        fs.unlinkSync(promptPath);
-      }
+      cleanupPromptFile(promptPath);
 
-      const signal = this.parseSignal(result.stdout + "\n" + result.stderr);
+      const signal = parseAgentSignal(result.stdout + "\n" + result.stderr);
       return {
         signal,
         output: result.stdout,
         exitCode: result.exitCode,
       };
-    } catch (err: any) {
-      if (fs.existsSync(promptPath)) {
-        fs.unlinkSync(promptPath);
-      }
+    } catch (err) {
+      cleanupPromptFile(promptPath);
+      const message = err instanceof Error ? err.message : String(err);
       return {
-        signal: "ERROR",
-        output: `Agent execution failed: ${err.message}`,
+        signal: AgentSignal.ERROR,
+        output: `Agent execution failed: ${message}`,
         exitCode: -1,
       };
     }
   }
+}
 
-  public parseSignal(output: string): string {
-    if (output.includes("SLICE_DONE")) return "SLICE_DONE";
-    if (output.includes("BROWSER_TEST_PASS")) return "BROWSER_TEST_PASS";
-    if (output.includes("REVIEW_PASS")) return "REVIEW_PASS";
-    return "ERROR";
+function cleanupPromptFile(promptPath: string): void {
+  if (fs.existsSync(promptPath)) {
+    fs.unlinkSync(promptPath);
   }
 }

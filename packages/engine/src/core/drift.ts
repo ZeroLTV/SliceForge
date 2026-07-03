@@ -2,6 +2,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { logger } from "../utils/logger.js";
+import { StatePersistenceError } from "../utils/errors.js";
 
 export function computeFileHash(filePath: string): string {
   if (!fs.existsSync(filePath)) {
@@ -11,14 +12,19 @@ export function computeFileHash(filePath: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-export function computeTagFingerprint(tag: string, docPaths: string[], projectRoot: string): string {
+export function computeTagFingerprint(
+  tag: string,
+  docPaths: string[],
+  projectRoot: string,
+): string {
   const hash = crypto.createHash("sha256");
-  // Sort paths to ensure fingerprint is deterministic
   const sortedPaths = [...docPaths].sort();
 
   let hasDocs = false;
   for (const docPath of sortedPaths) {
-    const absolutePath = path.isAbsolute(docPath) ? docPath : path.join(projectRoot, docPath);
+    const absolutePath = path.isAbsolute(docPath)
+      ? docPath
+      : path.join(projectRoot, docPath);
     if (fs.existsSync(absolutePath)) {
       const fileHash = computeFileHash(absolutePath);
       hash.update(`${docPath}:${fileHash}`);
@@ -27,7 +33,6 @@ export function computeTagFingerprint(tag: string, docPaths: string[], projectRo
   }
 
   if (!hasDocs) {
-    // If no docs, tag fingerprint is based on the tag name itself
     hash.update(`tag-name:${tag}`);
   }
 
@@ -48,9 +53,12 @@ function loadFingerprintMap(mapPath: string): DocsFingerprintMap {
   }
   try {
     const raw = fs.readFileSync(mapPath, "utf8");
-    return JSON.parse(raw);
-  } catch (err: any) {
-    logger.warn(`Failed to parse fingerprint map at ${mapPath}: ${err.message}. Initializing empty.`);
+    return JSON.parse(raw) as DocsFingerprintMap;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      `Failed to parse fingerprint map at ${mapPath}: ${message}. Initializing empty.`,
+    );
     return {};
   }
 }
@@ -62,8 +70,12 @@ function saveFingerprintMap(mapPath: string, map: DocsFingerprintMap): void {
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.writeFileSync(mapPath, JSON.stringify(map, null, 2), "utf8");
-  } catch (err: any) {
-    logger.error(`Failed to save fingerprint map to ${mapPath}: ${err.message}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new StatePersistenceError(
+      `Failed to save fingerprint map to ${mapPath}: ${message}`,
+      { mapPath },
+    );
   }
 }
 
@@ -82,7 +94,6 @@ export function isDrift(
     return true;
   }
 
-  // Also check if the test case artifact file exists
   const testCaseFile = path.join(testCasesDir, `${tag}.json`);
   if (!fs.existsSync(testCaseFile)) {
     logger.debug(`Drift detected: Test case file not found at ${testCaseFile}`);
@@ -92,7 +103,9 @@ export function isDrift(
   const currentFp = computeTagFingerprint(tag, docPaths, projectRoot);
   const drifted = savedEntry.fingerprint !== currentFp;
   if (drifted) {
-    logger.debug(`Drift detected for tag '${tag}'. Old: ${savedEntry.fingerprint}, New: ${currentFp}`);
+    logger.debug(
+      `Drift detected for tag '${tag}'. Old: ${savedEntry.fingerprint}, New: ${currentFp}`,
+    );
   }
   return drifted;
 }

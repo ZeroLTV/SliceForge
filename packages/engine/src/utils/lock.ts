@@ -1,36 +1,67 @@
 import * as fs from "fs";
 import { logger } from "./logger.js";
+import { LockAcquisitionError } from "./errors.js";
 
-export function acquireLock(lockFilePath: string): void {
-  if (fs.existsSync(lockFilePath)) {
-    let stale = true;
-    try {
-      const content = fs.readFileSync(lockFilePath, "utf8").trim();
-      const pid = parseInt(content, 10);
-      if (!isNaN(pid)) {
-        // process.kill(pid, 0) checks if process is running without killing it
-        process.kill(pid, 0);
-        stale = false;
-        throw new Error(`Another SliceForge instance is already running (PID: ${pid})`);
-      }
-    } catch (err: any) {
-      if (err.code === "ESRCH") {
-        // Process is not running, so lock is stale
-        logger.warn(`Stale lock file found (PID process is dead). Cleaning up lock: ${lockFilePath}`);
-      } else {
-        // Re-throw if it's the "already running" error
-        throw err;
-      }
-    }
+class AlreadyRunningError extends Error {
+  constructor(pid: number) {
+    super(`Another SliceForge instance is already running (PID: ${pid})`);
+    this.name = "AlreadyRunningError";
   }
+}
 
-  // Write current PID to lock file
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as NodeJS.ErrnoException).code === "ESRCH"
+    ) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+function tryWriteLockFile(lockFilePath: string): void {
   try {
     fs.writeFileSync(lockFilePath, `${process.pid}`, "utf8");
     logger.debug(`Acquired lock: ${lockFilePath} (PID: ${process.pid})`);
-  } catch (err: any) {
-    throw new Error(`Failed to create lock file: ${err.message}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new LockAcquisitionError(`Failed to create lock file: ${message}`, {
+      lockFilePath,
+    });
   }
+}
+
+export function acquireLock(lockFilePath: string): void {
+  if (fs.existsSync(lockFilePath)) {
+    let content: string;
+    try {
+      content = fs.readFileSync(lockFilePath, "utf8").trim();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new LockAcquisitionError(
+        `Failed to read lock file: ${message}`,
+        { lockFilePath },
+      );
+    }
+
+    const pid = parseInt(content, 10);
+    if (!isNaN(pid) && isProcessAlive(pid)) {
+      throw new AlreadyRunningError(pid);
+    }
+
+    logger.warn(
+      `Stale lock file found (PID ${isNaN(pid) ? "unknown" : pid} process is dead). Cleaning up lock: ${lockFilePath}`,
+    );
+  }
+
+  tryWriteLockFile(lockFilePath);
 }
 
 export function releaseLock(lockFilePath: string): void {
@@ -38,8 +69,12 @@ export function releaseLock(lockFilePath: string): void {
     try {
       fs.unlinkSync(lockFilePath);
       logger.debug(`Released lock: ${lockFilePath}`);
-    } catch (err: any) {
-      logger.error(`Failed to release lock file: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new LockAcquisitionError(
+        `Failed to release lock file: ${message}`,
+        { lockFilePath },
+      );
     }
   }
 }

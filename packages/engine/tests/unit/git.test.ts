@@ -8,7 +8,6 @@ import {
   getDiff,
 } from "../../src/utils/git.js";
 
-// Mock shell execution to keep tests isolated and fast
 jest.mock("../../src/utils/shell.js", () => ({
   execCommand: jest.fn(),
   spawnCommand: jest.fn(),
@@ -17,6 +16,7 @@ jest.mock("../../src/utils/shell.js", () => ({
 describe("git utils", () => {
   const mockCwd = "/mock/git/repo";
   const mockedExecCommand = execCommand as jest.MockedFunction<typeof execCommand>;
+  const mockedSpawnCommand = spawnCommand as jest.MockedFunction<typeof spawnCommand>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -32,7 +32,9 @@ describe("git utils", () => {
 
       const result = await hasUncommittedChanges(mockCwd);
       expect(result).toBe(true);
-      expect(mockedExecCommand).toHaveBeenCalledWith("git status --porcelain", { cwd: mockCwd });
+      expect(mockedExecCommand).toHaveBeenCalledWith("git status --porcelain", {
+        cwd: mockCwd,
+      });
     });
 
     it("should return false when porcelain output is empty", async () => {
@@ -61,13 +63,17 @@ describe("git utils", () => {
   describe("resetToLastCommit", () => {
     it("should call git reset and clean on resetToLastCommit", async () => {
       mockedExecCommand
-        .mockResolvedValueOnce({ stdout: "HEAD is now at 1234567", stderr: "", exitCode: 0 }) // reset
-        .mockResolvedValueOnce({ stdout: "Removing untrackedfile.ts", stderr: "", exitCode: 0 }); // clean
+        .mockResolvedValueOnce({ stdout: "HEAD is now at 1234567", stderr: "", exitCode: 0 })
+        .mockResolvedValueOnce({ stdout: "Removing untrackedfile.ts", stderr: "", exitCode: 0 });
 
       await expect(resetToLastCommit(mockCwd)).resolves.not.toThrow();
 
-      expect(mockedExecCommand).toHaveBeenNthCalledWith(1, "git reset --hard HEAD", { cwd: mockCwd });
-      expect(mockedExecCommand).toHaveBeenNthCalledWith(2, "git clean -fd", { cwd: mockCwd });
+      expect(mockedExecCommand).toHaveBeenNthCalledWith(1, "git reset --hard HEAD", {
+        cwd: mockCwd,
+      });
+      expect(mockedExecCommand).toHaveBeenNthCalledWith(2, "git clean -fd", {
+        cwd: mockCwd,
+      });
     });
 
     it("should throw if git reset fails", async () => {
@@ -77,19 +83,30 @@ describe("git utils", () => {
         exitCode: 1,
       });
 
-      await expect(resetToLastCommit(mockCwd)).rejects.toThrow("Failed to git reset");
+      await expect(resetToLastCommit(mockCwd)).rejects.toThrow(
+        "Failed to git reset",
+      );
     });
   });
 
   describe("commitSlice", () => {
     it("should add and commit changes successfully", async () => {
-      const mockedSpawnCommand = spawnCommand as jest.MockedFunction<typeof spawnCommand>;
-      mockedExecCommand.mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 }); // git add
-      mockedSpawnCommand.mockResolvedValueOnce({ stdout: "1 file changed", stderr: "", exitCode: 0 }); // git commit
+      mockedExecCommand
+        .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 })
+        .mockResolvedValueOnce({ stdout: "", stderr: "", exitCode: 0 });
+      mockedSpawnCommand.mockResolvedValueOnce({
+        stdout: "1 file changed",
+        stderr: "",
+        exitCode: 0,
+      });
 
-      await expect(commitSlice(mockCwd, "slice-1", "feat: implement slice-1")).resolves.not.toThrow();
+      await expect(
+        commitSlice(mockCwd, "slice-1", "feat: implement slice-1"),
+      ).resolves.not.toThrow();
 
-      expect(mockedExecCommand).toHaveBeenNthCalledWith(1, "git add .", { cwd: mockCwd });
+      expect(mockedExecCommand).toHaveBeenNthCalledWith(1, "git add -u .", {
+        cwd: mockCwd,
+      });
       expect(mockedSpawnCommand).toHaveBeenCalledWith(
         "git",
         ["commit", "-m", "feat: implement slice-1"],
@@ -101,7 +118,7 @@ describe("git utils", () => {
   describe("getChangedFiles", () => {
     it("should parse porcelain output and extract file names", async () => {
       mockedExecCommand.mockResolvedValueOnce({
-        stdout: " M src/index.ts\n?? \"new file.ts\"\n",
+        stdout: ' M src/index.ts\n?? "new file.ts"\n',
         stderr: "",
         exitCode: 0,
       });

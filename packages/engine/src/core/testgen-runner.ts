@@ -1,13 +1,14 @@
 import * as path from "path";
 import * as fs from "fs";
 import { SliceForgeConfig } from "./config.js";
-import { loadBacklog, Slice } from "./backlog.js";
+import { loadBacklog } from "./backlog.js";
 import { isDrift, updateFingerprint } from "./drift.js";
 import { buildPrompt } from "./prompt-builder.js";
 import { getAgentAdapter } from "./ralph-runner.js";
 import { logger } from "../utils/logger.js";
 import { commitSlice } from "../utils/git.js";
 import { loadAndValidateSecrets } from "../utils/secrets.js";
+import { resolveTemplatePath, ensureTemplateExists } from "../utils/template-resolver.js";
 
 export async function runTestGenLoop(
   config: SliceForgeConfig,
@@ -29,7 +30,6 @@ export async function runTestGenLoop(
   const backlog = loadBacklog(backlogPath);
   const agentAdapter = getAgentAdapter(config);
 
-  // Extract all unique requirement tags from slices
   const allTags = new Set<string>();
   const tagToDocPaths: Record<string, string[]> = {};
 
@@ -41,7 +41,6 @@ export async function runTestGenLoop(
           tagToDocPaths[tag] = [];
         }
         if (slice.docs) {
-          // Merge unique doc paths
           for (const doc of slice.docs) {
             if (!tagToDocPaths[tag].includes(doc)) {
               tagToDocPaths[tag].push(doc);
@@ -60,72 +59,71 @@ export async function runTestGenLoop(
 
     const drifted = isDrift(tag, docPaths, projectRoot, testCasesDir);
     if (!drifted) {
-      logger.debug(`Requirement tag '${tag}' test cases are up-to-date. Skipping.`);
+      logger.debug(
+        `Requirement tag '${tag}' test cases are up-to-date. Skipping.`,
+      );
       continue;
     }
 
     processedCount++;
     logger.step(`Generating test cases for tag: ${tag}`);
 
-    // Resolve prompt template
-    const templatePath = path.join(projectRoot, "packages/engine/templates/testgen.md");
-    const fallbackTemplatePath = path.join(projectRoot, "templates/testgen.md");
-    const actualTemplatePath = fs.existsSync(templatePath) ? templatePath : fallbackTemplatePath;
-
-    if (!fs.existsSync(actualTemplatePath)) {
-      fs.mkdirSync(path.dirname(actualTemplatePath), { recursive: true });
-      fs.writeFileSync(
-        actualTemplatePath,
-        "# TestGen Agent\n\nGenerate test cases for requirement tag: {{REQUIREMENT_TAG}}.\nSave JSON file to: {{ARTIFACT_PATH}}\n",
-        "utf8",
-      );
-    }
+    const templatePath = resolveTemplatePath(projectRoot, "testgen");
+    ensureTemplateExists(
+      templatePath,
+      "# TestGen Agent\n\nGenerate test cases for requirement tag: {{REQUIREMENT_TAG}}.\nSave JSON file to: {{ARTIFACT_PATH}}\n",
+    );
 
     const testCaseFileRelative = path.join(
       path.relative(projectRoot, testCasesDir),
       `${tag}.json`,
     );
 
-    // Read doc contents to pass in prompt
     let docsContent = "";
     for (const doc of docPaths) {
-      const absPath = path.isAbsolute(doc) ? doc : path.join(projectRoot, doc);
+      const absPath = path.isAbsolute(doc)
+        ? doc
+        : path.join(projectRoot, doc);
       if (fs.existsSync(absPath)) {
-        docsContent += `\n\n--- Document: ${doc} ---\n` + fs.readFileSync(absPath, "utf8");
+        docsContent +=
+          `\n\n--- Document: ${doc} ---\n` +
+          fs.readFileSync(absPath, "utf8");
       }
     }
 
-    const prompt = buildPrompt(actualTemplatePath, {
+    const prompt = buildPrompt(templatePath, {
       REQUIREMENT_TAG: tag,
       DOCS_CONTENT: docsContent || "(No specifications found)",
       ARTIFACT_PATH: testCaseFileRelative,
     });
 
-    const agentResult = await agentAdapter.run(prompt, {
+    void await agentAdapter.run(prompt, {
       cwd: projectRoot,
       timeoutMs: config.agent.timeoutMs || 300000,
       model: config.agent.model,
     });
 
-    // Validate if test case file was created and is valid JSON
     const testCaseFile = path.join(testCasesDir, `${tag}.json`);
     if (!fs.existsSync(testCaseFile)) {
-      logger.error(`TestGen Agent failed to create test case file for ${tag} at ${testCaseFile}`);
+      logger.error(
+        `TestGen Agent failed to create test case file for ${tag} at ${testCaseFile}`,
+      );
       continue;
     }
 
     try {
       const content = fs.readFileSync(testCaseFile, "utf8");
-      JSON.parse(content); // Validate JSON format
-    } catch (err: any) {
-      logger.error(`Generated test cases for ${tag} contain invalid JSON: ${err.message}`);
+      JSON.parse(content) as unknown;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(
+        `Generated test cases for ${tag} contain invalid JSON: ${message}`,
+      );
       continue;
     }
 
-    // Update fingerprint
     updateFingerprint(tag, docPaths, projectRoot, testCasesDir);
 
-    // Commit generated test cases to git
     await commitSlice(
       projectRoot,
       tag,
