@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import type { ValidateFunction } from "ajv";
 
 import AjvModule from "ajv";
@@ -7,42 +8,27 @@ import AjvModule from "ajv";
 type AjvConstructor = new (opts: { allErrors: boolean }) => { compile: (schema: unknown) => ValidateFunction };
 const Ajv = (((AjvModule as unknown as { default?: AjvConstructor }).default ?? AjvModule) as unknown) as AjvConstructor;
 
-function tryLoadViaDirname(schemaRelativePath: string): string | null {
+function getSchemaDir(): string {
   try {
-    return fs.readFileSync(
-      path.join(__dirname, schemaRelativePath),
-      "utf8",
-    );
+    return path.dirname(fileURLToPath(import.meta.url));
   } catch {
-    return null;
-  }
-}
-
-function tryLoadViaImportMeta(schemaRelativePath: string): string | null {
-  try {
-    const { fileURLToPath } = require("url") as typeof import("url");
-    const currentUrl = new Function("return import.meta.url")() as string;
-    const schemaPath = fileURLToPath(new URL(schemaRelativePath, currentUrl));
-    return fs.readFileSync(schemaPath, "utf8");
-  } catch {
-    return null;
+    return __dirname;
   }
 }
 
 export function loadSchema(schemaRelativePath: string): Record<string, unknown> {
-  const dirnameResult = tryLoadViaDirname(schemaRelativePath);
-  if (dirnameResult) {
-    return JSON.parse(dirnameResult);
-  }
+  const dir = getSchemaDir();
+  const schemaPath = path.join(dir, schemaRelativePath);
 
-  const importMetaResult = tryLoadViaImportMeta(schemaRelativePath);
-  if (importMetaResult) {
-    return JSON.parse(importMetaResult);
+  try {
+    const raw = fs.readFileSync(schemaPath, "utf8");
+    return JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to load schema at ${schemaPath}: ${message}`,
+    );
   }
-
-  throw new Error(
-    `Failed to load schema: ${schemaRelativePath}. Neither CommonJS __dirname nor ESM import.meta.url resolution worked.`,
-  );
 }
 
 export function createValidator(schema: Record<string, unknown>): ValidateFunction {
