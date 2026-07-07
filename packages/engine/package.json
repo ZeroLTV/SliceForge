@@ -1,9 +1,13 @@
 {
   "name": "@zeroltv/sliceforge",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "AI Harness Engine for spec-driven automation loops",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "templates"
+  ],
   "types": "dist/index.d.ts",
   "bin": {
     "sliceforge": "dist/cli/index.js"
