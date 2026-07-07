@@ -16,7 +16,7 @@ export interface SliceForgeConfig {
     timeoutMs?: number;
   };
   stack: {
-    type: "node" | "dotnet" | "custom";
+    type: "node" | "dotnet" | "react-native" | "custom";
     api?: { port: number; healthPath: string };
     web?: { port: number; healthPath: string };
     db?: { compose: string; service: string };

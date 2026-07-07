@@ -19,6 +19,7 @@ import { ClaudeCodeAgent } from "../agents/claude-code-agent.js";
 import { ApiAgent } from "../agents/api-agent.js";
 import { NodeAdapter } from "../adapters/node-adapter.js";
 import { DotnetAdapter } from "../adapters/dotnet-adapter.js";
+import { ReactNativeAdapter } from "../adapters/react-native-adapter.js";
 import { acquireLock, releaseLock } from "../utils/lock.js";
 import { logger } from "../utils/logger.js";
 import { loadAndValidateSecrets } from "../utils/secrets.js";
@@ -58,6 +59,8 @@ export function getStackAdapter(
       return new NodeAdapter(config, projectRoot);
     case "dotnet":
       return new DotnetAdapter(config, projectRoot);
+    case "react-native":
+      return new ReactNativeAdapter(config, projectRoot);
     case "custom":
       throw new Error(
         "Custom stack adapter requires a user-provided implementation. See docs/adapters.md for instructions.",

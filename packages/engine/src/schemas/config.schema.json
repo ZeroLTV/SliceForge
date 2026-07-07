@@ -16,7 +16,7 @@
     "stack": {
       "type": "object",
       "properties": {
-        "type": { "type": "string", "enum": ["node", "dotnet", "custom"] },
+        "type": { "type": "string", "enum": ["node", "dotnet", "react-native", "custom"] },
         "api": {
           "type": "object",
           "properties": {
