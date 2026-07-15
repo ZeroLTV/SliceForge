@@ -5,6 +5,9 @@ import { logger } from "../utils/logger.js";
 import { ConfigValidationError, ConfigurationNotFoundError } from "../utils/errors.js";
 import { loadSchema, createValidator } from "../utils/schema-loader.js";
 
+export type GitDirtyMode = "refuse" | "stash" | "force-reset";
+export type GitRollbackMode = "slice-only" | "none";
+
 const schema = loadSchema("../schemas/config.schema.json");
 const validateFn: ValidateFunction = createValidator(schema);
 
@@ -51,6 +54,11 @@ export interface SliceForgeConfig {
     state: string;
     lock: string;
   };
+  git?: {
+    dirtyMode?: GitDirtyMode;
+    rollbackMode?: GitRollbackMode;
+    autoCommit?: boolean;
+  };
 }
 
 interface RawConfig {
@@ -60,6 +68,7 @@ interface RawConfig {
   checks?: unknown;
   loop?: unknown;
   paths?: Record<string, unknown>;
+  git?: Record<string, unknown>;
 }
 
 export function loadConfig(projectRoot: string): SliceForgeConfig {
@@ -87,6 +96,13 @@ export function loadConfig(projectRoot: string): SliceForgeConfig {
     state: ".sliceforge-state.json",
     lock: ".sliceforge.lock",
     ...rawConfig.paths,
+  };
+
+  rawConfig.git = {
+    dirtyMode: "refuse",
+    rollbackMode: "slice-only",
+    autoCommit: true,
+    ...(rawConfig.git as Record<string, unknown> | undefined),
   };
 
   const valid = validateFn(rawConfig);

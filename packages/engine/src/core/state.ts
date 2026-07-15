@@ -4,7 +4,7 @@ import { StatePersistenceError } from "../utils/errors.js";
 
 export interface RunState {
   currentSliceId: string;
-  status: "running" | "pending_approval" | "completed";
+  status: "running" | "pending_approval" | "completed" | "pending_manual_commit";
   retriesPerSlice: Record<string, number>;
   gatesCompleted: ("checks" | "preview" | "browser" | "review")[];
   costAccumulated: {
@@ -14,6 +14,7 @@ export interface RunState {
   };
   startedAt: string;
   updatedAt: string;
+  git?: { baseSha?: string; sliceId?: string };
 }
 
 export function loadState(stateFilePath: string): RunState {

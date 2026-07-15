@@ -1,5 +1,8 @@
 import { jest, describe, it, expect } from "@jest/globals";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cliModule: any;
+
 const mockCommandInstance = {
   name: jest.fn().mockReturnThis(),
   description: jest.fn().mockReturnThis(),
@@ -47,7 +50,7 @@ jest.mock("../../src/utils/logger", () => ({
   },
 }));
 
-require("../../src/cli/index");
+cliModule = require("../../src/cli/index");
 
 describe("CLI command registration", () => {
   it("should set program metadata (name, description, version)", () => {
@@ -115,5 +118,65 @@ describe("CLI module import safety", () => {
   it("should not throw when imported", () => {
     // Already imported at top of file — if it threw, this suite would not run.
     expect(true).toBe(true);
+  });
+});
+
+describe("parseGitMode", () => {
+  it("returns undefined for undefined value", () => {
+    expect(
+      cliModule.parseGitMode(undefined, ["refuse", "stash"], "--git-dirty-mode"),
+    ).toBeUndefined();
+  });
+
+  it("returns the value when allowed", () => {
+    expect(
+      cliModule.parseGitMode("stash", ["refuse", "stash"], "--git-dirty-mode"),
+    ).toBe("stash");
+  });
+
+  it("throws for an invalid value", () => {
+    expect(() =>
+      cliModule.parseGitMode(
+        "abc",
+        ["refuse", "stash", "force-reset"],
+        "--git-dirty-mode",
+      ),
+    ).toThrow(/Invalid --git-dirty-mode value/);
+  });
+});
+
+describe("applyGitOptions", () => {
+  const baseConfig = {
+    project: "test",
+    agent: { type: "api" },
+    stack: { type: "node" },
+    checks: { commands: { build: "npm run build", test: { unit: "npm test" } } },
+    loop: { maxIterations: 5, maxRetriesPerSlice: 2, browserTest: { required: false, requirePreviewStack: false }, testCaseGate: "skip" },
+    paths: { backlog: "b.json", testCases: "tc", guardrails: "g.md", state: "s.json", lock: "l" },
+  };
+
+  it("returns a new config object (does not mutate original)", () => {
+    const result = cliModule.applyGitOptions(baseConfig, { gitDirtyMode: "stash" });
+    expect(result).not.toBe(baseConfig);
+    expect(baseConfig.git).toBeUndefined();
+    expect(result.git.dirtyMode).toBe("stash");
+  });
+
+  it("merges git overrides with existing git config", () => {
+    const configWithGit = { ...baseConfig, git: { autoCommit: false } };
+    const result = cliModule.applyGitOptions(configWithGit, { gitRollbackMode: "none" });
+    expect(result.git.autoCommit).toBe(false);
+    expect(result.git.rollbackMode).toBe("none");
+  });
+
+  it("passes through config unchanged when no git options", () => {
+    const result = cliModule.applyGitOptions(baseConfig, {});
+    expect(result.git).toEqual({});
+    expect(result.project).toBe("test");
+  });
+
+  it("handles --no-git-auto-commit flag", () => {
+    const result = cliModule.applyGitOptions(baseConfig, { gitAutoCommit: false });
+    expect(result.git.autoCommit).toBe(false);
   });
 });

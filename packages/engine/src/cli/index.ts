@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import * as fs from "fs";
 import * as path from "path";
-import { loadConfig } from "../core/config.js";
+import { loadConfig, SliceForgeConfig } from "../core/config.js";
 import { runRalphLoop, approveSlice } from "../core/ralph-runner.js";
 import { runTestGenLoop } from "../core/testgen-runner.js";
 import { loadBacklog } from "../core/backlog.js";
@@ -108,13 +108,55 @@ program
     }
   });
 
+export function parseGitMode<T extends string>(
+  val: unknown,
+  allowed: T[],
+  flag: string,
+): T | undefined {
+  if (val === undefined) return undefined;
+  if (!(allowed as string[]).includes(val as string)) {
+    throw new Error(
+      `Invalid ${flag} value: "${val}". Allowed: ${allowed.join(", ")}`,
+    );
+  }
+  return val as T;
+}
+
+export function applyGitOptions(
+  config: SliceForgeConfig,
+  options: Record<string, unknown>,
+): SliceForgeConfig {
+  const dm = parseGitMode(
+    options.gitDirtyMode,
+    ["refuse", "stash", "force-reset"] as const,
+    "--git-dirty-mode",
+  );
+  const rm = parseGitMode(
+    options.gitRollbackMode,
+    ["slice-only", "none"] as const,
+    "--git-rollback-mode",
+  );
+  const gitOverrides: Record<string, unknown> = {};
+  if (dm) gitOverrides.dirtyMode = dm;
+  if (rm) gitOverrides.rollbackMode = rm;
+  if (options.gitAutoCommit === false) gitOverrides.autoCommit = false;
+
+  return {
+    ...config,
+    git: { ...config.git, ...gitOverrides },
+  };
+}
+
 program
   .command("loop")
   .description("Run the Ralph Loop continuously to implement backlog slices")
   .option("-m, --max <iterations>", "Maximum loop iterations override")
+  .option("--git-dirty-mode <mode>", "Dirty tree handling: refuse | stash | force-reset")
+  .option("--git-rollback-mode <mode>", "Retry rollback: slice-only | none")
+  .option("--no-git-auto-commit", "Disable automatic git commit of completed slices")
   .action(async (options) => {
     const cwd = process.cwd();
-    const config = loadConfig(cwd);
+    let config = loadConfig(cwd);
 
     const logFilePath = path.isAbsolute(config.paths.state)
       ? path.join(path.dirname(config.paths.state), "sliceforge.log")
@@ -122,8 +164,10 @@ program
     logger.setLogFile(logFilePath);
 
     if (options.max) {
-      config.loop.maxIterations = parseInt(options.max, 10);
+      config = { ...config, loop: { ...config.loop, maxIterations: parseInt(options.max, 10) } };
     }
+
+    config = applyGitOptions(config, options);
 
     await runRalphLoop(config, cwd, false);
   });
@@ -133,10 +177,15 @@ program
   .description(
     "Run a single Ralph iteration (pick -> implement -> verify)",
   )
-  .action(async () => {
+  .option("--git-dirty-mode <mode>", "Dirty tree handling: refuse | stash | force-reset")
+  .option("--git-rollback-mode <mode>", "Retry rollback: slice-only | none")
+  .option("--no-git-auto-commit", "Disable automatic git commit of completed slices")
+  .action(async (options) => {
     const cwd = process.cwd();
-    const config = loadConfig(cwd);
+    let config = loadConfig(cwd);
     logger.setLogFile(path.join(cwd, "sliceforge.log"));
+
+    config = applyGitOptions(config, options);
 
     await runRalphLoop(config, cwd, true);
   });

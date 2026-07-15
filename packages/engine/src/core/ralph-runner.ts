@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { SliceForgeConfig } from "./config.js";
+import { SliceForgeConfig, GitDirtyMode, GitRollbackMode } from "./config.js";
 import {
   loadBacklog,
   saveBacklog,
@@ -27,8 +27,12 @@ import {
   hasUncommittedChanges,
   resetToLastCommit,
   commitSlice,
+  stashChanges,
+  resetToSha,
+  getCurrentSha,
 } from "../utils/git.js";
 import { runComputationalChecks } from "../gates/checks.js";
+import { spawnCommand } from "../utils/shell.js";
 import {
   startPreviewStack,
   stopPreviewStack,
@@ -107,13 +111,48 @@ async function validateDriftGate(
   }
 }
 
-async function rollbackIfDirty(projectRoot: string): Promise<void> {
-  if (await hasUncommittedChanges(projectRoot)) {
-    logger.warn(
-      "Dirty working tree detected. Performing git rollback to clean state...",
+const REFUSE_MSG =
+  "SliceForge requires a clean working tree. Commit or stash your changes, " +
+  "or rerun with --git-dirty-mode=stash / --git-dirty-mode=force-reset.";
+
+async function isOwnedDirty(state: RunState, projectRoot: string): Promise<boolean> {
+  if (!state.git?.baseSha || !state.git.sliceId) return false;
+  if (state.status !== "running") return false;
+  if (state.currentSliceId !== state.git.sliceId) return false;
+  if (!(await hasUncommittedChanges(projectRoot))) return false;
+  return (await getCurrentSha(projectRoot)) === state.git.baseSha;
+}
+
+async function ensureCleanForSlice(
+  projectRoot: string,
+  rollbackMode: GitRollbackMode,
+  sliceId: string,
+  statePath: string,
+  state: RunState,
+  preservePaths: string[],
+): Promise<void> {
+  const owned = await isOwnedDirty(state, projectRoot);
+
+  if (owned) {
+    if (rollbackMode !== "none") {
+      await resetToSha(projectRoot, state.git!.baseSha!, { preservePaths });
+      return;
+    }
+    throw new Error(
+      `Slice ${sliceId} has uncommitted SliceForge-owned changes and rollbackMode=none. ` +
+        `Commit, stash, or reset them manually before continuing.`,
     );
-    await resetToLastCommit(projectRoot);
   }
+
+  if (await hasUncommittedChanges(projectRoot)) {
+    throw new Error(
+      "Unexpected dirty working tree detected after preflight cleanup. " +
+        "Commit or stash your changes before continuing.",
+    );
+  }
+
+  state.git = { baseSha: await getCurrentSha(projectRoot), sliceId };
+  saveState(statePath, state);
 }
 
 function loadGuardrailsContent(guardrailsPath: string): string {
@@ -315,6 +354,36 @@ export async function runRalphLoop(
       return;
     }
 
+    if (state.status === "pending_manual_commit") {
+      if (!(await hasUncommittedChanges(projectRoot))) {
+        state.status = "running";
+        state.git = undefined;
+        saveState(statePath, state);
+      } else {
+        logger.warn(
+          "Previous run left an uncommitted slice (autoCommit=false). Commit it, then rerun.",
+        );
+        return;
+      }
+    }
+
+    const gitCfg = config.git ?? {};
+    const dirtyMode: GitDirtyMode = gitCfg.dirtyMode ?? "refuse";
+    const rollbackMode: GitRollbackMode = gitCfg.rollbackMode ?? "slice-only";
+    const autoCommit = gitCfg.autoCommit ?? true;
+
+    const preservePaths = [statePath, lockPath, guardrailsPath];
+
+    const dirty = await hasUncommittedChanges(projectRoot);
+    const owned = await isOwnedDirty(state, projectRoot);
+    if (dirty && !owned) {
+      if (dirtyMode === "refuse") throw new Error(REFUSE_MSG);
+      if (dirtyMode === "stash")
+        await stashChanges(projectRoot, `sliceforge-preflight-${Date.now()}`);
+      else if (dirtyMode === "force-reset")
+        await resetToLastCommit(projectRoot, preservePaths);
+    }
+
     const backlog = loadBacklog(backlogPath);
 
     if (allSlicesPass(backlog)) {
@@ -364,7 +433,14 @@ export async function runRalphLoop(
 
       await validateDriftGate(slice, config, projectRoot, testCasesDir);
 
-      await rollbackIfDirty(projectRoot);
+      await ensureCleanForSlice(
+        projectRoot,
+        rollbackMode,
+        slice.id,
+        statePath,
+        state,
+        preservePaths,
+      );
 
       const guardrailsContent = loadGuardrailsContent(guardrailsPath);
 
@@ -428,17 +504,37 @@ export async function runRalphLoop(
       logger.success(
         `Slice ${slice.id} successfully implemented! Committing to git...`,
       );
-      markSliceDone(backlog, slice.id);
-      saveBacklog(backlogPath, backlog);
 
-      await commitSlice(
-        projectRoot,
-        slice.id,
-        `aih/slice-${slice.id} completed successfully`,
-      );
-
-      state.retriesPerSlice[slice.id] = 0;
-      saveState(statePath, state);
+      const originalBacklog = fs.readFileSync(backlogPath, "utf8");
+      try {
+        markSliceDone(backlog, slice.id);
+        saveBacklog(backlogPath, backlog);
+        if (autoCommit) {
+          await commitSlice(
+            projectRoot,
+            slice.id,
+            `aih/slice-${slice.id} completed successfully`,
+          );
+        } else {
+          logger.warn(
+            "autoCommit disabled; backlog marked done — commit the code AND backlog.json together, then rerun.",
+          );
+          state.status = "pending_manual_commit";
+        }
+        state.git = undefined;
+        state.retriesPerSlice[slice.id] = 0;
+        saveState(statePath, state);
+        if (!autoCommit && !runOnce) break;
+      } catch (err) {
+        const resetResult = await spawnCommand("git", ["reset", "--mixed", "HEAD"], {
+          cwd: projectRoot,
+        });
+        if (resetResult.exitCode !== 0) {
+          logger.warn(`Failed to unstage changes during rollback: ${resetResult.stderr}`);
+        }
+        fs.writeFileSync(backlogPath, originalBacklog, "utf8");
+        throw err;
+      }
 
       if (runOnce) break;
     }
@@ -468,19 +564,38 @@ export async function approveSlice(
 
   logger.info(`Approving slice ${sliceId}...`);
 
+  const gitCfg = config.git ?? {};
+  const autoCommit = gitCfg.autoCommit ?? true;
   const backlog = loadBacklog(backlogPath);
-  markSliceDone(backlog, sliceId);
-  saveBacklog(backlogPath, backlog);
 
-  await commitSlice(
-    projectRoot,
-    sliceId,
-    `aih/slice-${sliceId} approved and completed`,
-  );
-
-  state.status = "running";
-  state.retriesPerSlice[sliceId] = 0;
-  saveState(statePath, state);
+  const originalBacklog = fs.readFileSync(backlogPath, "utf8");
+  try {
+    markSliceDone(backlog, sliceId);
+    saveBacklog(backlogPath, backlog);
+    if (autoCommit) {
+      await commitSlice(
+        projectRoot,
+        sliceId,
+        `aih/slice-${sliceId} approved and completed`,
+      );
+      state.status = "running";
+    } else {
+      logger.warn(
+        "autoCommit disabled; backlog marked done — commit the code AND backlog.json together, then rerun.",
+      );
+      state.status = "pending_manual_commit";
+    }
+    state.git = undefined;
+    state.retriesPerSlice[sliceId] = 0;
+    saveState(statePath, state);
+  } catch (err) {
+    const resetResult = await spawnCommand("git", ["reset", "--mixed", "HEAD"], { cwd: projectRoot });
+    if (resetResult.exitCode !== 0) {
+      logger.warn(`Failed to unstage changes during rollback: ${resetResult.stderr}`);
+    }
+    fs.writeFileSync(backlogPath, originalBacklog, "utf8");
+    throw err;
+  }
 
   logger.success(`Slice ${sliceId} approved and committed.`);
 }

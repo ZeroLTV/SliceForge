@@ -106,6 +106,15 @@
         "state": { "type": "string" },
         "lock": { "type": "string" }
       }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dirtyMode": { "type": "string", "enum": ["refuse", "stash", "force-reset"] },
+        "rollbackMode": { "type": "string", "enum": ["slice-only", "none"] },
+        "autoCommit": { "type": "boolean" }
+      }
     }
   },
   "required": ["project", "agent", "stack", "checks", "loop"]
