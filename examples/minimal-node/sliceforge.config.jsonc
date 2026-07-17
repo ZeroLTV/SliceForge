@@ -1,0 +1,39 @@
+{
+  "$schema": "../../packages/engine/src/schemas/config.schema.json",
+  "schemaVersion": 1,
+  "project": "minimal-node-app",
+  "agents": {
+    "implementer": { "type": "codex" },
+    "testgen": { "type": "codex" },
+    "reviewer": { "type": "codex" },
+  },
+  "targets": {
+    "app": {
+      "root": ".",
+      "preset": "node",
+      "commands": {
+        "build": { "command": "npm", "args": ["run", "build"] },
+        "lint": { "command": "npm", "args": ["run", "lint"] },
+        "unit": { "command": "npm", "args": ["run", "test:unit"] },
+      },
+    },
+  },
+  "isolation": { "mode": "worktree" },
+  "gates": {
+    "order": ["artifact", "build", "lint", "unit", "integration", "e2e", "browser", "review"],
+    "browser": { "enabled": false },
+    "review": { "enabled": true, "advisory": true },
+  },
+  "policies": {
+    "protectedPatterns": [
+      "**/.env*",
+      "**/*.pem",
+      ".git/**",
+      "sliceforge.config.jsonc",
+      "sliceforge.plan.yaml",
+    ],
+    "maxRetries": 2,
+  },
+  "reporting": { "retainRuns": 20, "maxLogBytes": 1048576 },
+  "ci": { "reportOnly": true },
+}

@@ -1,0 +1,170 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SliceForge Agent Request",
+  "oneOf": [
+    { "$ref": "#/definitions/executionRequest" },
+    { "$ref": "#/definitions/planningRequest" }
+  ],
+  "definitions": {
+    "executionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "runId", "role", "cwd", "slice", "constraints", "context"],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "runId": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["implementer", "testgen", "reviewer"] },
+        "cwd": { "type": "string", "minLength": 1 },
+        "slice": { "$ref": "agent-response.schema.json#/definitions/slice" },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["readOnly", "allowedPaths", "requiredArtifacts"],
+          "properties": {
+            "readOnly": { "type": "boolean" },
+            "allowedPaths": { "type": "array", "items": { "type": "string" } },
+            "requiredArtifacts": { "type": "array", "items": { "type": "string" } },
+            "environment": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["priorFailures"],
+          "properties": {
+            "priorFailures": { "type": "array", "items": { "type": "string" } },
+            "diff": { "type": "string" }
+          }
+        }
+      }
+    },
+    "taskRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "request",
+        "targets",
+        "constraints",
+        "priority",
+        "attachments",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "request": { "type": "string", "minLength": 1 },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "constraints": { "type": "array", "items": { "type": "string" } },
+        "priority": { "type": "integer", "minimum": 0 },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "source"],
+            "properties": {
+              "id": { "type": "string" },
+              "kind": { "enum": ["document", "image", "figma"] },
+              "source": { "type": "string" },
+              "storedPath": { "type": "string" },
+              "sha256": { "type": "string" },
+              "sizeBytes": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "createdAt": { "type": "string" }
+      }
+    },
+    "planningRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "runId", "role", "cwd", "task", "constraints", "context"],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "runId": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["clarifier", "planner"] },
+        "cwd": { "type": "string", "minLength": 1 },
+        "task": { "$ref": "#/definitions/taskRequest" },
+        "packet": { "type": "object" },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["readOnly", "maxQuestions", "allowedTargets", "targetRoots"],
+          "properties": {
+            "readOnly": { "const": true },
+            "maxQuestions": { "const": 3 },
+            "allowedTargets": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string" }
+            },
+            "targetRoots": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project", "documentation", "repositoryContext", "targetGates", "proposal"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 },
+            "documentation": { "type": "array", "items": { "type": "string" } },
+            "repositoryContext": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "kind", "sha256", "sizeBytes", "snippet"],
+                "properties": {
+                  "path": { "type": "string", "minLength": 1 },
+                  "kind": {
+                    "enum": ["convention", "manifest", "api-schema", "documentation"]
+                  },
+                  "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                  "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 131072 },
+                  "snippet": { "type": "string", "maxLength": 2048 }
+                }
+              }
+            },
+            "targetGates": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "artifact",
+                    "build",
+                    "lint",
+                    "unit",
+                    "integration",
+                    "e2e",
+                    "browser",
+                    "review"
+                  ]
+                }
+              }
+            },
+            "proposal": {
+              "oneOf": [
+                { "$ref": "agent-response.schema.json#/definitions/clarifierOutput" },
+                { "$ref": "agent-response.schema.json#/definitions/plannerOutput" }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

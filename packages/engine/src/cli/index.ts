@@ -1,271 +1,560 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import * as fs from "fs";
 import * as path from "path";
-import { loadConfig, SliceForgeConfig } from "../core/config.js";
-import { runRalphLoop, approveSlice } from "../core/ralph-runner.js";
-import { runTestGenLoop } from "../core/testgen-runner.js";
-import { loadBacklog } from "../core/backlog.js";
-import { loadState } from "../core/state.js";
-import { logger } from "../utils/logger.js";
+import { initializeProject } from "../core/onboarding.js";
+import { loadConfig, loadPlan, validateProject } from "../core/config-loader.js";
+import { runDoctor } from "../core/doctor.js";
+import { GitService } from "../core/git-service.js";
+import { getRuntimePaths, RuntimeStore } from "../core/runtime-store.js";
+import { HtmlReporter } from "../core/reporter.js";
+import { SliceForgeOrchestrator, type RunOutcome } from "../core/orchestrator.js";
+import { ExitCode, type RunRecord } from "../core/contracts.js";
+import type { TaskRecord } from "../core/contracts.js";
+import { TaskEngine } from "../core/task-engine.js";
+import { TaskQueueEngine } from "../core/task-queue.js";
+import { EvaluationEngine } from "../core/evaluation.js";
 
-const program = new Command();
+const orchestrator = new SliceForgeOrchestrator();
 
-process.on("uncaughtException", (err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  logger.error(`Uncaught Exception: ${message}`);
-  process.exit(1);
-});
+function classifyError(error: unknown): ExitCode {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /config|schema|parse|plan|not found|unknown target|dependency cycle|escapes|unsafe path|executable|invalid|expected|must be|no answers supplied|interval/i.test(
+      message,
+    )
+  )
+    return ExitCode.ConfigurationError;
+  if (/clean|blocked|attention|promot|HEAD changed|cancelled|approval/i.test(message))
+    return ExitCode.Blocked;
+  if (/gate|test|build|lint|artifact|policy|agent/i.test(message)) return ExitCode.GateFailed;
+  return ExitCode.InternalError;
+}
 
-process.on("unhandledRejection", (reason: unknown) => {
-  const message =
-    reason instanceof Error ? reason.message : String(reason);
-  logger.error(`Unhandled Rejection: ${message}`);
-  process.exit(1);
-});
-
-program
-  .name("sliceforge")
-  .description("SliceForge — Reusable AI Harness Engine CLI")
-  .version("1.0.0");
-
-program
-  .command("init")
-  .description("Initialize SliceForge configuration in the current directory")
-  .action(() => {
-    const cwd = process.cwd();
-    const configPath = path.join(cwd, "sliceforge.config.json");
-    const backlogPath = path.join(cwd, "whole-app-backlog.json");
-
-    logger.info(`Initializing SliceForge in ${cwd}...`);
-
-    if (fs.existsSync(configPath)) {
-      logger.warn(
-        "sliceforge.config.json already exists. Skipping config initialization.",
-      );
-    } else {
-      const defaultConfig = {
-        project: "my-sliceforge-app",
-        agent: {
-          type: "api",
-          model: "claude-3-5-sonnet-20241022",
-        },
-        stack: {
-          type: "node",
-        },
-        checks: {
-          commands: {
-            build: "npm run build",
-            lint: "npm run lint",
-            test: {
-              unit: "npm run test:unit",
-            },
-          },
-        },
-        loop: {
-          maxIterations: 10,
-          maxRetriesPerSlice: 3,
-          requireHumanApproval: ["security", "schema"],
-          browserTest: {
-            required: false,
-            requirePreviewStack: false,
-          },
-          testCaseGate: "warn",
-        },
-      };
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify(defaultConfig, null, 2),
-        "utf8",
-      );
-      logger.success("Created default sliceforge.config.json");
-    }
-
-    if (fs.existsSync(backlogPath)) {
-      logger.warn(
-        "whole-app-backlog.json already exists. Skipping backlog initialization.",
-      );
-    } else {
-      const defaultBacklog = {
-        branchName: "main",
-        slices: [
-          {
-            id: "slice-1",
-            passes: false,
-            priority: 1,
-            description: "Bootstrap minimal project workspace structure",
-            tags: ["setup"],
-          },
-        ],
-      };
-      fs.writeFileSync(
-        backlogPath,
-        JSON.stringify(defaultBacklog, null, 2),
-        "utf8",
-      );
-      logger.success("Created sample whole-app-backlog.json");
-    }
-  });
-
-export function parseGitMode<T extends string>(
-  val: unknown,
-  allowed: T[],
-  flag: string,
-): T | undefined {
-  if (val === undefined) return undefined;
-  if (!(allowed as string[]).includes(val as string)) {
-    throw new Error(
-      `Invalid ${flag} value: "${val}". Allowed: ${allowed.join(", ")}`,
-    );
+async function action(task: () => Promise<void>): Promise<void> {
+  try {
+    await task();
+  } catch (err) {
+    const exitCode = classifyError(err);
+    const impact =
+      exitCode === ExitCode.ConfigurationError
+        ? "The run did not start because its configuration or environment is unsafe or incomplete."
+        : exitCode === ExitCode.Blocked
+          ? "No code was promoted; explicit user action is required."
+          : exitCode === ExitCode.GateFailed
+            ? "Validation did not establish a trustworthy result, so promotion is disabled."
+            : "The operation stopped without declaring success; local recovery state was retained when possible.";
+    const next =
+      exitCode === ExitCode.ConfigurationError ? "sliceforge doctor" : "sliceforge status";
+    console.error(`\nCause:  ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`Impact: ${impact}`);
+    console.error(`Next:   ${next}`);
+    process.exitCode = exitCode;
   }
-  return val as T;
 }
 
-export function applyGitOptions(
-  config: SliceForgeConfig,
-  options: Record<string, unknown>,
-): SliceForgeConfig {
-  const dm = parseGitMode(
-    options.gitDirtyMode,
-    ["refuse", "stash", "force-reset"] as const,
-    "--git-dirty-mode",
-  );
-  const rm = parseGitMode(
-    options.gitRollbackMode,
-    ["slice-only", "none"] as const,
-    "--git-rollback-mode",
-  );
-  const gitOverrides: Record<string, unknown> = {};
-  if (dm) gitOverrides.dirtyMode = dm;
-  if (rm) gitOverrides.rollbackMode = rm;
-  if (options.gitAutoCommit === false) gitOverrides.autoCommit = false;
-
-  return {
-    ...config,
-    git: { ...config.git, ...gitOverrides },
-  };
+function statusColor(status: RunRecord["status"]): string {
+  if (["promoted", "ready_to_promote"].includes(status)) return `\x1b[32m${status}\x1b[0m`;
+  if (["failed", "blocked", "cancelled"].includes(status)) return `\x1b[31m${status}\x1b[0m`;
+  if (status === "needs_attention") return `\x1b[33m${status}\x1b[0m`;
+  return `\x1b[36m${status}\x1b[0m`;
 }
 
-program
-  .command("loop")
-  .description("Run the Ralph Loop continuously to implement backlog slices")
-  .option("-m, --max <iterations>", "Maximum loop iterations override")
-  .option("--git-dirty-mode <mode>", "Dirty tree handling: refuse | stash | force-reset")
-  .option("--git-rollback-mode <mode>", "Retry rollback: slice-only | none")
-  .option("--no-git-auto-commit", "Disable automatic git commit of completed slices")
-  .action(async (options) => {
-    const cwd = process.cwd();
-    let config = loadConfig(cwd);
+function printOutcome(outcome: RunOutcome): void {
+  const { run, reportPath } = outcome;
+  console.log(`\nRun:    ${run.runId}`);
+  console.log(`Slice:  ${run.sliceId}`);
+  console.log(`Status: ${statusColor(run.status)}`);
+  console.log(`Report: ${reportPath}`);
+  if (run.status === "ready_to_promote") console.log(`Next:   sliceforge promote ${run.runId}`);
+  else if (run.status === "needs_attention") {
+    console.log(`Next:   sliceforge inspect ${run.runId}`);
+    process.exitCode = ExitCode.Blocked;
+  } else if (run.status === "blocked") {
+    console.log(`Next:   sliceforge rebase ${run.runId}`);
+    process.exitCode = ExitCode.Blocked;
+  } else if (run.status === "failed") {
+    console.log(`Next:   sliceforge inspect ${run.runId}`);
+    process.exitCode = ExitCode.GateFailed;
+  }
+}
 
-    const logFilePath = path.isAbsolute(config.paths.state)
-      ? path.join(path.dirname(config.paths.state), "sliceforge.log")
-      : path.join(cwd, "sliceforge.log");
-    logger.setLogFile(logFilePath);
+async function reporterFor(projectRoot: string): Promise<HtmlReporter> {
+  const git = new GitService(projectRoot);
+  await git.assertRepository();
+  const paths = getRuntimePaths(projectRoot, await git.commonDir());
+  const config = loadConfig(projectRoot);
+  if (config.reporting.directory)
+    paths.reports = path.resolve(paths.root, config.reporting.directory);
+  return new HtmlReporter(new RuntimeStore(paths));
+}
 
-    if (options.max) {
-      config = { ...config, loop: { ...config.loop, maxIterations: parseInt(options.max, 10) } };
+function parseAgent(value: string): "codex" | "claude" | "cursor" {
+  if (!["codex", "claude", "cursor"].includes(value))
+    throw new Error(`Invalid agent '${value}'. Expected codex, claude, or cursor.`);
+  return value as "codex" | "claude" | "cursor";
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function taskNextAction(task: TaskRecord): string {
+  if (task.status === "clarifying") return `sliceforge task answer ${task.taskId}`;
+  if (task.status === "awaiting_approval") return `sliceforge task approve ${task.taskId}`;
+  if (task.status === "queued") return "sliceforge queue start";
+  if (task.status === "needs_attention" && task.execution?.pendingRunId) {
+    return `sliceforge task accept-attention ${task.taskId}`;
+  }
+  if (task.status === "ready_to_promote") {
+    const runId = task.runIds.at(-1);
+    return runId ? `sliceforge promote ${runId}` : `sliceforge task inspect ${task.taskId}`;
+  }
+  return `sliceforge task inspect ${task.taskId}`;
+}
+
+function printTask(task: TaskRecord): void {
+  console.log(`\nTask:      ${task.taskId}`);
+  console.log(`Status:    ${task.status}`);
+  console.log(`Readiness: ${task.packet.readinessScore}/100`);
+  if (task.packet.questions.some((question) => !question.answer)) {
+    console.log("Questions:");
+    for (const question of task.packet.questions.filter((item) => !item.answer)) {
+      console.log(`- ${question.id}: ${question.question}`);
+      console.log(`  Recommended: ${question.recommendation}`);
     }
+  }
+  if (task.graph)
+    console.log(
+      `Plan:      ${task.graph.slices.length} slice(s), ${task.graph.fingerprint.slice(0, 12)}`,
+    );
+  console.log(`Next:      ${taskNextAction(task)}`);
+}
 
-    config = applyGitOptions(config, options);
+async function evaluationEngine(projectRoot: string): Promise<EvaluationEngine> {
+  const config = loadConfig(projectRoot);
+  const git = new GitService(projectRoot);
+  await git.assertRepository();
+  return new EvaluationEngine(
+    projectRoot,
+    config,
+    new RuntimeStore(getRuntimePaths(projectRoot, await git.commonDir())),
+  );
+}
 
-    await runRalphLoop(config, cwd, false);
-  });
+export function buildProgram(): Command {
+  const program = new Command()
+    .name("sliceforge")
+    .description("SliceForge - reliable local-first AI Harness Engine")
+    .version("1.0.0");
 
-program
-  .command("once")
-  .description(
-    "Run a single Ralph iteration (pick -> implement -> verify)",
-  )
-  .option("--git-dirty-mode <mode>", "Dirty tree handling: refuse | stash | force-reset")
-  .option("--git-rollback-mode <mode>", "Retry rollback: slice-only | none")
-  .option("--no-git-auto-commit", "Disable automatic git commit of completed slices")
-  .action(async (options) => {
-    const cwd = process.cwd();
-    let config = loadConfig(cwd);
-    logger.setLogFile(path.join(cwd, "sliceforge.log"));
+  program
+    .command("init")
+    .description("Detect the project and create JSONC/YAML configuration")
+    .option("--agent <agent>", "codex | claude | cursor")
+    .option("-y, --yes", "accept detected defaults without prompts")
+    .option("--force", "replace existing config and plan")
+    .action((options) =>
+      action(async () => {
+        const result = await initializeProject(process.cwd(), {
+          agent: options.agent ? parseAgent(options.agent) : undefined,
+          yes: Boolean(options.yes),
+          force: Boolean(options.force),
+        });
+        console.log("\nSliceForge initialized.");
+        for (const message of result.messages) console.log(`- ${message}`);
+      }),
+    );
 
-    config = applyGitOptions(config, options);
+  program
+    .command("doctor")
+    .description("Validate Git, agents, targets, commands, plan, and capabilities")
+    .action(() =>
+      action(async () => {
+        const root = process.cwd();
+        const config = loadConfig(root);
+        const plan = loadPlan(root, config);
+        const report = await runDoctor(root, config, plan);
+        for (const check of report.checks) {
+          const marker =
+            check.status === "pass" ? "PASS" : check.status === "warn" ? "WARN" : "FAIL";
+          console.log(`${marker.padEnd(5)} ${check.message}`);
+          if (check.remediation) console.log(`      Fix: ${check.remediation}`);
+        }
+        try {
+          console.log(`\nReport: ${(await reporterFor(root)).writeDoctor(report)}`);
+        } catch {
+          /* Git may not be valid yet. */
+        }
+        if (!report.ok) process.exitCode = ExitCode.ConfigurationError;
+      }),
+    );
 
-    await runRalphLoop(config, cwd, true);
-  });
-
-program
-  .command("testgen")
-  .description(
-    "Run the TestGen Loop to generate test cases from spec documents",
-  )
-  .option("-o, --once", "Generate test cases for exactly one tag and stop")
-  .action(async (options) => {
-    const cwd = process.cwd();
-    const config = loadConfig(cwd);
-    logger.setLogFile(path.join(cwd, "sliceforge.log"));
-
-    await runTestGenLoop(config, cwd, !!options.once);
-  });
-
-program
-  .command("status")
-  .description("Print current backlog and implementation status")
-  .action(() => {
-    const cwd = process.cwd();
-    try {
-      const config = loadConfig(cwd);
-      const backlogPath = path.isAbsolute(config.paths.backlog)
-        ? config.paths.backlog
-        : path.join(cwd, config.paths.backlog);
-      const statePath = path.isAbsolute(config.paths.state)
-        ? config.paths.state
-        : path.join(cwd, config.paths.state);
-
-      const backlog = loadBacklog(backlogPath);
-      const state = loadState(statePath);
-
-      const completed = backlog.slices.filter((s) => s.passes).length;
-      const total = backlog.slices.length;
-      const pct =
-        total > 0 ? Math.round((completed / total) * 100) : 0;
-
-      logger.section(`SliceForge Status: ${config.project}`);
-      console.log(
-        `Backlog Completion: ${completed}/${total} slices (${pct}%)`,
-      );
-      console.log(`Loop State status:   ${state.status.toUpperCase()}`);
-      if (state.currentSliceId) {
-        console.log(`Current Active Slice: ${state.currentSliceId}`);
-      }
-      if (state.costAccumulated.estimatedCostUSD !== undefined) {
+  const plan = program.command("plan").description("Inspect and validate the SliceForge plan");
+  plan
+    .command("validate")
+    .description("Validate schemas, targets, paths, and dependency graph")
+    .action(() =>
+      action(async () => {
+        const result = validateProject(process.cwd());
         console.log(
-          `API Cost Accumulated: $${state.costAccumulated.estimatedCostUSD.toFixed(4)}`,
+          `Plan valid: ${result.plan.slices.length} slice(s), ${Object.keys(result.config.targets).length} target(s).`,
         );
-      }
+      }),
+    );
 
-      console.log("\nSlices list:");
-      for (const slice of backlog.slices) {
-        const marker = slice.passes
-          ? "\x1b[32m[x]\x1b[0m"
-          : "\x1b[33m[ ]\x1b[0m";
+  program
+    .command("do <request>")
+    .description("Build a schema-validated, clarified task plan from a raw request")
+    .option("--from <file>", "append a local Markdown or issue-export file")
+    .option("--image <path>", "attach a local reference image", collect, [])
+    .option("--figma <url>", "attach an HTTPS Figma reference")
+    .option("--target <target>", "select an affected target", collect, [])
+    .option("--constraint <text>", "add an implementation constraint", collect, [])
+    .option("--priority <number>", "queue priority; lower values run first", "50")
+    .action((request, options) =>
+      action(async () => {
+        const engine = await TaskEngine.open(process.cwd());
+        const task = await engine.create(request, {
+          from: options.from,
+          images: options.image,
+          figma: options.figma,
+          targets: options.target,
+          constraints: options.constraint,
+          priority: Number(options.priority),
+        });
+        printTask(task);
         console.log(
-          `  ${marker} ${slice.id} (Priority: ${slice.priority}) - ${slice.description}`,
+          `Report:    ${new HtmlReporter(engine.runtime).writeTask(task, engine.tasks.events(task.taskId))}`,
         );
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error(`Failed to retrieve status: ${message}`);
-    }
+        if (task.status === "clarifying") process.exitCode = ExitCode.Blocked;
+      }),
+    );
+
+  const task = program.command("task").description("Inspect and control task-level workflows");
+  task
+    .command("list")
+    .description("List local Harness Engine tasks")
+    .option("--json", "emit machine-readable JSON")
+    .action((options) =>
+      action(async () => {
+        const tasks = (await TaskEngine.open(process.cwd())).tasks.list();
+        if (options.json) return void console.log(JSON.stringify(tasks, null, 2));
+        if (!tasks.length) return void console.log('No tasks yet. Next: sliceforge do "<request>"');
+        for (const item of tasks)
+          console.log(
+            `${item.taskId}  ${item.status.padEnd(19)}  ${item.request.request.split(/\r?\n/, 1)[0]}`,
+          );
+      }),
+    );
+  task
+    .command("inspect <taskId>")
+    .description("Show request, blockers, approved graph and evidence")
+    .option("--json", "emit machine-readable JSON")
+    .action((taskId, options) =>
+      action(async () => {
+        const engine = await TaskEngine.open(process.cwd());
+        const item = engine.tasks.load(taskId);
+        if (options.json) console.log(JSON.stringify(item, null, 2));
+        else {
+          printTask(item);
+          console.log(
+            `Report:    ${new HtmlReporter(engine.runtime).writeTask(item, engine.tasks.events(item.taskId))}`,
+          );
+        }
+      }),
+    );
+  task
+    .command("answer <taskId>")
+    .description("Answer blocking questions as --set question-id=answer or interactively")
+    .option("--set <answer>", "question-id=answer", collect, [])
+    .action((taskId, options) =>
+      action(async () => {
+        const engine = await TaskEngine.open(process.cwd());
+        const current = engine.tasks.load(taskId);
+        const answers: Record<string, string> = {};
+        for (const value of options.set as string[]) {
+          const separator = value.indexOf("=");
+          if (separator <= 0)
+            throw new Error(`Invalid answer '${value}'. Expected question-id=answer.`);
+          answers[value.slice(0, separator)] = value.slice(separator + 1);
+        }
+        if (!Object.keys(answers).length && process.stdin.isTTY && process.stdout.isTTY) {
+          const { input } = await import("@inquirer/prompts");
+          for (const question of current.packet.questions.filter((item) => !item.answer)) {
+            answers[question.id] = await input({
+              message: question.question,
+              default: question.recommendation,
+            });
+          }
+        }
+        if (!Object.keys(answers).length)
+          throw new Error("No answers supplied. Use --set question-id=answer.");
+        printTask(await engine.answer(taskId, answers));
+      }),
+    );
+  task
+    .command("approve <taskId>")
+    .description("Approve the immutable plan fingerprint and enqueue the task")
+    .action((taskId) =>
+      action(async () => printTask((await TaskEngine.open(process.cwd())).approve(taskId))),
+    );
+  task
+    .command("revise <taskId>")
+    .description("Create a new immutable plan revision from explicit feedback")
+    .requiredOption("--feedback <text>", "what must change in the next revision")
+    .action((taskId, options) =>
+      action(async () =>
+        printTask(await (await TaskEngine.open(process.cwd())).revise(taskId, options.feedback)),
+      ),
+    );
+  task
+    .command("accept-attention <taskId>")
+    .description("Accept a staged slice manual/review checkpoint and continue the task graph")
+    .action((taskId) =>
+      action(async () =>
+        printTask(await (await TaskQueueEngine.open(process.cwd())).acceptAttention(taskId)),
+      ),
+    );
+  task
+    .command("cancel <taskId>")
+    .description("Cancel a task without modifying the original worktree")
+    .action((taskId) =>
+      action(async () => printTask((await TaskEngine.open(process.cwd())).cancel(taskId))),
+    );
+
+  const queue = program
+    .command("queue")
+    .description("Run approved tasks from the persistent queue");
+  queue
+    .command("start")
+    .description("Process queued tasks until empty, paused or blocked")
+    .option("--concurrency <number>", "maximum concurrent isolated task runs")
+    .option("--watch", "keep polling for newly approved tasks")
+    .option("--poll-ms <number>", "watch polling interval", "5000")
+    .action((options) =>
+      action(async () => {
+        const queue = await TaskQueueEngine.open(process.cwd());
+        const concurrency =
+          options.concurrency === undefined ? undefined : Number(options.concurrency);
+        const runCycle = async (): Promise<void> => {
+          const result = await queue.start(concurrency);
+          console.log(
+            `Processed: ${result.processed.length}  Ready: ${result.readyToPromote.length}  Failed: ${result.failed.length}`,
+          );
+          if (result.failed.length) process.exitCode = ExitCode.GateFailed;
+        };
+        await runCycle();
+        if (options.watch) {
+          const pollMs = Number(options.pollMs);
+          if (!Number.isInteger(pollMs) || pollMs < 1000 || pollMs > 300_000) {
+            throw new Error("Queue poll interval must be between 1000 and 300000 ms.");
+          }
+          let stopping = false;
+          const stop = (): void => {
+            stopping = true;
+          };
+          process.once("SIGINT", stop);
+          process.once("SIGTERM", stop);
+          try {
+            while (!stopping && !queue.status().control.paused) {
+              await new Promise((resolve) => setTimeout(resolve, pollMs));
+              if (!stopping) await runCycle();
+            }
+          } finally {
+            process.removeListener("SIGINT", stop);
+            process.removeListener("SIGTERM", stop);
+          }
+        }
+        console.log("Next: sliceforge task list");
+      }),
+    );
+  queue
+    .command("pause")
+    .description("Prevent workers from claiming new tasks")
+    .action(() =>
+      action(async () => {
+        (await TaskQueueEngine.open(process.cwd())).setPaused(true);
+        console.log("Queue paused. Active isolated runs are not promoted or terminated.");
+      }),
+    );
+  queue
+    .command("resume")
+    .description("Allow workers to claim queued tasks")
+    .action(() =>
+      action(async () => {
+        (await TaskQueueEngine.open(process.cwd())).setPaused(false);
+        console.log("Queue resumed. Next: sliceforge queue start");
+      }),
+    );
+  queue
+    .command("status")
+    .description("Show queue control and task states")
+    .option("--json", "emit machine-readable JSON")
+    .action((options) =>
+      action(async () => {
+        const status = (await TaskQueueEngine.open(process.cwd())).status();
+        if (options.json) return void console.log(JSON.stringify(status, null, 2));
+        console.log(`Queue: ${status.control.paused ? "paused" : "running"}`);
+        for (const item of status.tasks) console.log(`${item.taskId}  ${item.status}`);
+        console.log(
+          `Next: ${status.control.paused ? "sliceforge queue resume" : "sliceforge queue start"}`,
+        );
+      }),
+    );
+
+  const evaluation = program
+    .command("eval")
+    .description("Run repeatable model and harness regression suites");
+  evaluation
+    .command("run <suite>")
+    .description("Execute every case, repetition and context variant")
+    .option("--baseline <name>", "compare during the run")
+    .action((suite, options) =>
+      action(async () => {
+        const engine = await evaluationEngine(process.cwd());
+        const record = await engine.run(suite, options.baseline);
+        console.log(`Evaluation: ${record.evaluationId}`);
+        console.log(`Success:    ${(record.metrics.taskSuccessRate * 100).toFixed(1)}%`);
+        console.log(`Regression: ${record.regression.passed ? "passed" : "failed"}`);
+        if (record.regression.drift?.agentVersionsChanged)
+          console.log(`Agent drift: ${record.regression.drift.agentVersionChanges.join("; ")}`);
+        console.log(`Report:     ${new HtmlReporter(engine.store).writeEvaluation(record)}`);
+        console.log(`Next:       sliceforge eval compare ${record.evaluationId}`);
+        if (!record.regression.passed) process.exitCode = ExitCode.GateFailed;
+      }),
+    );
+  evaluation
+    .command("compare <runId>")
+    .description("Compare evaluation metrics with a stored baseline")
+    .option("--baseline <name>", "baseline name", "default")
+    .action((runId, options) =>
+      action(async () => {
+        const result = (await evaluationEngine(process.cwd())).compare(runId, options.baseline);
+        console.log(JSON.stringify(result, null, 2));
+        if (!result.passed) process.exitCode = ExitCode.GateFailed;
+      }),
+    );
+  evaluation
+    .command("accept-baseline <runId>")
+    .description("Store a passing evaluation as a named baseline")
+    .option("--name <name>", "baseline name", "default")
+    .action((runId, options) =>
+      action(async () =>
+        console.log((await evaluationEngine(process.cwd())).acceptBaseline(runId, options.name)),
+      ),
+    );
+
+  program
+    .command("run [sliceId]")
+    .description("Implement and verify one slice in an isolated Git worktree")
+    .action((sliceId) =>
+      action(async () => printOutcome(await orchestrator.start(process.cwd(), sliceId))),
+    );
+  program
+    .command("resume <runId>")
+    .description("Recover and continue an interrupted run")
+    .action((runId) =>
+      action(async () => printOutcome(await orchestrator.resume(process.cwd(), runId))),
+    );
+  program
+    .command("testgen [sliceId]")
+    .description("Generate schema-validated acceptance tests in an isolated worktree")
+    .action((sliceId) =>
+      action(async () => printOutcome(await orchestrator.startTestGen(process.cwd(), sliceId))),
+    );
+
+  program
+    .command("status")
+    .description("List local SliceForge runs and their next state")
+    .option("--json", "emit machine-readable JSON")
+    .action((options) =>
+      action(async () => {
+        const runs = await orchestrator.list(process.cwd());
+        if (options.json) return void console.log(JSON.stringify(runs, null, 2));
+        if (!runs.length) return void console.log("No SliceForge runs yet. Next: sliceforge run");
+        for (const run of runs)
+          console.log(
+            `${run.runId}  ${statusColor(run.status)}  ${run.kind.padEnd(14)}  ${run.sliceId}`,
+          );
+      }),
+    );
+  program
+    .command("inspect <runId>")
+    .description("Show a run summary and regenerate its HTML report")
+    .action((runId) =>
+      action(async () => printOutcome(await orchestrator.inspect(process.cwd(), runId))),
+    );
+  program
+    .command("report <runId>")
+    .description("Generate the self-contained local HTML report")
+    .action((runId) =>
+      action(async () => console.log(await orchestrator.reportPath(process.cwd(), runId))),
+    );
+
+  program
+    .command("promote <runId>")
+    .description("Cherry-pick a verified run into the original branch")
+    .option("--accept-review", "explicitly accept advisory AI review findings")
+    .option("--accept-attention", "explicitly accept all recorded manual/review attention items")
+    .action((runId, options) =>
+      action(async () => {
+        const outcome = await orchestrator.promote(
+          process.cwd(),
+          runId,
+          Boolean(options.acceptReview || options.acceptAttention),
+        );
+        await (await TaskQueueEngine.open(process.cwd())).syncPromoted(runId);
+        printOutcome(outcome);
+      }),
+    );
+  program
+    .command("rebase <runId>")
+    .description("Rebase a verified commit and rerun deterministic gates")
+    .action((runId) =>
+      action(async () => printOutcome(await orchestrator.rebase(process.cwd(), runId))),
+    );
+  program
+    .command("cancel <runId>")
+    .description("Cancel a run and remove its isolated worktree")
+    .action((runId) =>
+      action(async () => printOutcome(await orchestrator.cancel(process.cwd(), runId))),
+    );
+  program
+    .command("clean")
+    .description("Remove retained terminal runs beyond the history limit")
+    .action(() =>
+      action(async () => {
+        const result = await orchestrator.clean(process.cwd());
+        console.log(
+          result.removed.length ? `Removed: ${result.removed.join(", ")}` : "Nothing to clean.",
+        );
+      }),
+    );
+
+  program
+    .command("verify [sliceId]")
+    .description("Run deterministic gates without a write-capable agent")
+    .option("--ci", "non-interactive report-only mode")
+    .action((sliceId) =>
+      action(async () => {
+        const outcome = await orchestrator.verify(process.cwd(), sliceId);
+        console.log(`Verification: ${outcome.passed ? "passed" : "failed"}`);
+        console.log(`Report: ${outcome.reportPath}`);
+        if (!outcome.passed) process.exitCode = ExitCode.GateFailed;
+      }),
+    );
+
+  return program;
+}
+
+export async function runCli(argv = process.argv): Promise<void> {
+  await buildProgram().parseAsync(argv);
+}
+
+if (process.env.SLICEFORGE_NO_AUTO_RUN !== "1") {
+  void runCli().catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = ExitCode.InternalError;
   });
-
-program
-  .command("approve <sliceId>")
-  .description(
-    "Approve and commit a slice currently pending human review",
-  )
-  .action(async (sliceId) => {
-    const cwd = process.cwd();
-    const config = loadConfig(cwd);
-    logger.setLogFile(path.join(cwd, "sliceforge.log"));
-
-    await approveSlice(config, cwd, sliceId);
-  });
-
-program.parse(process.argv);
+}

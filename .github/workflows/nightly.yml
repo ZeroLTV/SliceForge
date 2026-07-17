@@ -1,0 +1,78 @@
+name: Nightly hardening
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      soak_hours:
+        description: "Queue soak duration in hours; use 24 for a release qualification run"
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Node ${{ matrix.node }} regression
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20.x", "22.x"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Lint code
+        run: npm run lint
+
+      - name: Build engine
+        run: npm run build
+
+      - name: Run regression suite with coverage
+        run: npm run test:coverage
+
+      - name: Validate published package contents
+        run: npm pack --dry-run -w packages/engine
+
+  queue-soak:
+    name: Persistent queue soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 1500
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build engine
+        run: npm run build
+
+      - name: Run scheduled queue smoke soak
+        if: github.event_name == 'schedule' || inputs.soak_hours == '0'
+        run: npm run soak:queue -w packages/engine -- --duration-ms 30000 --batch-size 2 --concurrency 2
+
+      - name: Run release queue soak
+        if: github.event_name == 'workflow_dispatch' && inputs.soak_hours != '0'
+        run: npm run soak:queue -w packages/engine -- --duration-hours ${{ inputs.soak_hours }} --batch-size 2 --concurrency 2

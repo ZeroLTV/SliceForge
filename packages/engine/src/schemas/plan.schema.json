@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SliceForge Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "slices"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "slices": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "priority", "targets", "acceptance", "allowedPaths"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "title": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "priority": { "type": "integer", "minimum": 0 },
+          "dependsOn": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "targets": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "given": { "type": "string" },
+                "when": { "type": "string" },
+                "then": { "type": "string" },
+                "expected": { "type": "string" }
+              },
+              "anyOf": [{ "required": ["then"] }, { "required": ["expected"] }]
+            }
+          },
+          "allowedPaths": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "requiredArtifacts": { "type": "array", "items": { "type": "string" } },
+          "requiredGates": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": [
+                "artifact",
+                "build",
+                "lint",
+                "unit",
+                "integration",
+                "e2e",
+                "browser",
+                "review"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "docs": { "type": "array", "items": { "type": "string" } },
+          "docsImpact": { "enum": ["none", "required", "review"] },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["acceptanceId", "kind"],
+              "properties": {
+                "acceptanceId": { "type": "string", "minLength": 1 },
+                "kind": { "enum": ["test", "command", "artifact", "visual", "manual"] },
+                "source": { "type": "string" },
+                "required": { "type": "boolean" }
+              }
+            }
+          },
+          "retryPolicy": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["maxAttempts"],
+            "properties": { "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 20 } }
+          }
+        }
+      }
+    }
+  }
+}

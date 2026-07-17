@@ -1,121 +1,336 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SliceForgeConfig",
+  "title": "SliceForge Configuration",
   "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "project",
+    "agents",
+    "targets",
+    "isolation",
+    "gates",
+    "policies",
+    "reporting",
+    "ci"
+  ],
   "properties": {
-    "project": { "type": "string" },
-    "agent": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "project": { "type": "string", "minLength": 1 },
+    "agents": {
       "type": "object",
+      "additionalProperties": false,
+      "required": ["implementer", "testgen", "reviewer"],
       "properties": {
-        "type": { "type": "string", "enum": ["cursor-cli", "claude-code", "api"] },
-        "model": { "type": "string" },
-        "timeoutMs": { "type": "integer" }
-      },
-      "required": ["type"]
+        "clarifier": { "$ref": "#/definitions/agent" },
+        "planner": { "$ref": "#/definitions/agent" },
+        "implementer": { "$ref": "#/definitions/agent" },
+        "testgen": { "$ref": "#/definitions/agent" },
+        "reviewer": { "$ref": "#/definitions/agent" }
+      }
     },
-    "stack": {
+    "targets": {
       "type": "object",
-      "properties": {
-        "type": { "type": "string", "enum": ["node", "dotnet", "react-native", "custom"] },
-        "api": {
-          "type": "object",
-          "properties": {
-            "port": { "type": "integer" },
-            "healthPath": { "type": "string" }
-          },
-          "required": ["port", "healthPath"]
-        },
-        "web": {
-          "type": "object",
-          "properties": {
-            "port": { "type": "integer" },
-            "healthPath": { "type": "string" }
-          },
-          "required": ["port", "healthPath"]
-        },
-        "db": {
-          "type": "object",
-          "properties": {
-            "compose": { "type": "string" },
-            "service": { "type": "string" }
-          },
-          "required": ["compose", "service"]
-        }
-      },
-      "required": ["type"]
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/definitions/target" }
     },
-    "checks": {
+    "isolation": {
       "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": { "mode": { "const": "worktree" } }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "browser", "review"],
       "properties": {
-        "commands": {
+        "order": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/gateKind" },
+          "uniqueItems": true
+        },
+        "browser": {
           "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
           "properties": {
-            "build": { "type": "string" },
-            "lint": { "type": "string" },
-            "test": {
+            "enabled": { "type": "boolean" },
+            "command": { "$ref": "#/definitions/command" },
+            "reportPath": { "type": "string" },
+            "visual": {
               "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "artifactDirectory",
+                "manifestPath",
+                "requiredViewports",
+                "maxDiffRatio",
+                "pixelThreshold",
+                "maxScreenshotBytes",
+                "requireNoRuntimeErrors",
+                "requireNoOverflow",
+                "requireAccessibility",
+                "requireAssets"
+              ],
               "properties": {
-                "unit": { "type": "string" },
-                "integration": { "type": "string" },
-                "e2e": { "type": "string" }
+                "artifactDirectory": { "type": "string", "minLength": 1 },
+                "manifestPath": { "type": "string", "minLength": 1 },
+                "baselineDirectory": { "type": "string", "minLength": 1 },
+                "requiredViewports": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 20,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "width", "height"],
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+                      "width": { "type": "integer", "minimum": 1, "maximum": 10000 },
+                      "height": { "type": "integer", "minimum": 1, "maximum": 10000 }
+                    }
+                  }
+                },
+                "maxDiffRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+                "pixelThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+                "maxScreenshotBytes": { "type": "integer", "minimum": 1024 },
+                "requireNoRuntimeErrors": { "type": "boolean" },
+                "requireNoOverflow": { "type": "boolean" },
+                "requireAccessibility": { "type": "boolean" },
+                "requireAssets": { "type": "boolean" }
               }
             }
           },
-          "required": ["build", "test"]
+          "allOf": [
+            {
+              "if": { "properties": { "enabled": { "const": true } } },
+              "then": { "required": ["command", "reportPath"] }
+            }
+          ]
         },
-        "forbiddenPatterns": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "pattern": { "type": "string" },
-              "paths": { "type": "array", "items": { "type": "string" } },
-              "message": { "type": "string" }
-            },
-            "required": ["id", "pattern", "paths", "message"]
-          }
-        }
-      },
-      "required": ["commands"]
-    },
-    "loop": {
-      "type": "object",
-      "properties": {
-        "maxIterations": { "type": "integer" },
-        "maxRetriesPerSlice": { "type": "integer" },
-        "requireHumanApproval": { "type": "array", "items": { "type": "string" } },
-        "browserTest": {
+        "review": {
           "type": "object",
-          "properties": {
-            "required": { "type": "boolean" },
-            "requirePreviewStack": { "type": "boolean" }
-          },
-          "required": ["required", "requirePreviewStack"]
-        },
-        "testCaseGate": { "type": "string", "enum": ["required", "warn", "skip"] }
-      },
-      "required": ["maxIterations", "maxRetriesPerSlice", "browserTest", "testCaseGate"]
-    },
-    "paths": {
-      "type": "object",
-      "properties": {
-        "backlog": { "type": "string" },
-        "testCases": { "type": "string" },
-        "guardrails": { "type": "string" },
-        "state": { "type": "string" },
-        "lock": { "type": "string" }
+          "additionalProperties": false,
+          "required": ["enabled", "advisory"],
+          "properties": { "enabled": { "type": "boolean" }, "advisory": { "type": "boolean" } }
+        }
       }
     },
-    "git": {
+    "policies": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["protectedPatterns", "maxRetries"],
       "properties": {
-        "dirtyMode": { "type": "string", "enum": ["refuse", "stash", "force-reset"] },
-        "rollbackMode": { "type": "string", "enum": ["slice-only", "none"] },
-        "autoCommit": { "type": "boolean" }
+        "protectedPatterns": { "type": "array", "items": { "type": "string" } },
+        "maxRetries": { "type": "integer", "minimum": 0, "maximum": 20 }
       }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fallbackRole"],
+      "properties": {
+        "fallbackRole": { "enum": ["implementer", "testgen", "reviewer"] },
+        "maxEstimatedCostUSD": { "type": "number", "minimum": 0 },
+        "minimumReadinessScore": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "rules": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "agent"],
+            "properties": {
+              "role": {
+                "enum": ["clarifier", "planner", "implementer", "testgen", "reviewer"]
+              },
+              "targets": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "presets": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "enum": ["node", "dotnet", "python", "java", "react-native", "generic"]
+                }
+              },
+              "minComplexity": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "maxComplexity": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "agent": { "$ref": "#/definitions/agent" }
+            }
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "concurrency",
+        "taskTimeoutMs",
+        "maxRepairAttempts",
+        "maxRepeatedFailure",
+        "leaseMs"
+      ],
+      "properties": {
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "taskTimeoutMs": { "type": "integer", "minimum": 1000 },
+        "maxRepairAttempts": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "maxRepeatedFailure": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "leaseMs": { "type": "integer", "minimum": 5000 },
+        "portRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+            "end": { "type": "integer", "minimum": 1024, "maximum": 65535 }
+          }
+        },
+        "portEnv": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repetitions",
+        "contextVariants",
+        "maxSuccessRateRegression",
+        "requireSchemaCompliance"
+      ],
+      "properties": {
+        "repetitions": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "contextVariants": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["original", "reordered", "irrelevant", "reduced"] }
+        },
+        "maxSuccessRateRegression": { "type": "number", "minimum": 0, "maximum": 1 },
+        "requireSchemaCompliance": { "type": "boolean" }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxAttachmentBytes"],
+      "properties": {
+        "maxAttachmentBytes": { "type": "integer", "minimum": 1 },
+        "figmaProvider": { "$ref": "#/definitions/command" }
+      }
+    },
+    "documentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultImpact", "requireReviewWhenUncertain"],
+      "properties": {
+        "defaultImpact": { "enum": ["none", "required", "review"] },
+        "requireReviewWhenUncertain": { "type": "boolean" }
+      }
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retainRuns", "maxLogBytes"],
+      "properties": {
+        "directory": { "type": "string" },
+        "retainRuns": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxLogBytes": { "type": "integer", "minimum": 1024 }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reportOnly"],
+      "properties": { "reportOnly": { "const": true } }
     }
   },
-  "required": ["project", "agent", "stack", "checks", "loop"]
+  "definitions": {
+    "gateKind": {
+      "enum": ["artifact", "build", "lint", "unit", "integration", "e2e", "browser", "review"]
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "envAllowlist": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "shell": { "type": "boolean" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["codex", "claude", "cursor", "command"] },
+        "command": { "type": "string" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "model": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 1000 },
+        "capabilities": {
+          "type": "array",
+          "items": { "enum": ["clarifier", "planner", "implementer", "testgen", "reviewer"] },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "command" } } },
+          "then": { "required": ["command", "capabilities"] }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "preset", "commands"],
+      "properties": {
+        "root": { "type": "string" },
+        "preset": { "enum": ["node", "dotnet", "python", "java", "react-native", "generic"] },
+        "dependsOn": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "prepare": { "$ref": "#/definitions/command" },
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "build": { "$ref": "#/definitions/command" },
+            "lint": { "$ref": "#/definitions/command" },
+            "unit": { "$ref": "#/definitions/command" },
+            "integration": { "$ref": "#/definitions/command" },
+            "e2e": { "$ref": "#/definitions/command" },
+            "browser": { "$ref": "#/definitions/command" }
+          }
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "properties": {
+            "url": { "type": "string" },
+            "timeoutMs": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
 }

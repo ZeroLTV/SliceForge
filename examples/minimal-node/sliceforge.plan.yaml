@@ -1,0 +1,11 @@
+schemaVersion: 1
+slices:
+  - id: first-slice
+    title: Add one observable behavior
+    priority: 1
+    targets: [app]
+    acceptance:
+      - id: AC-001
+        expected: The new behavior is covered by an automated unit test.
+    allowedPaths: [src/**, tests/**]
+    requiredGates: [build, lint, unit, review]

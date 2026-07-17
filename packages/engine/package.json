@@ -1,12 +1,36 @@
 {
   "name": "@zeroltv/sliceforge",
-  "version": "1.2.0",
-  "description": "AI Harness Engine for spec-driven automation loops",
+  "version": "1.0.0",
+  "description": "Reliable local-first AI Harness Engine for evidence-driven software delivery",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZeroLTV/SliceForge.git"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas/config.schema.json": "./dist/schemas/config.schema.json",
+    "./schemas/plan.schema.json": "./dist/schemas/plan.schema.json",
+    "./schemas/agent-request.schema.json": "./dist/schemas/agent-request.schema.json",
+    "./schemas/agent-response.schema.json": "./dist/schemas/agent-response.schema.json",
+    "./schemas/visual-manifest.schema.json": "./dist/schemas/visual-manifest.schema.json",
+    "./schemas/evaluation-suite.schema.json": "./dist/schemas/evaluation-suite.schema.json",
+    "./schemas/testcases.schema.json": "./dist/schemas/testcases.schema.json",
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
-    "templates"
+    "scripts/queue-soak.mjs",
+    "scripts/preset-smoke.mjs",
+    "scripts/validate-schemas.mjs"
   ],
   "types": "dist/index.d.ts",
   "bin": {
@@ -15,15 +39,31 @@
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
     "lint": "eslint \"src/**/*.ts\"",
-    "test": "jest"
+    "test": "jest",
+    "test:coverage": "jest --coverage --runInBand",
+    "schema:check": "node scripts/validate-schemas.mjs",
+    "soak:queue": "node scripts/queue-soak.mjs",
+    "smoke:presets": "node scripts/preset-smoke.mjs"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "ajv": "^8.0.0",
     "commander": "^12.0.0",
-    "dotenv": "^16.0.0",
-    "ajv": "^8.0.0"
+    "execa": "^5.1.1",
+    "jsonc-parser": "^3.3.1",
+    "minimatch": "^10.2.5",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "proper-lockfile": "^4.1.2",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.61.1",
     "@types/jest": "^29.5.0",
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
+    "@types/proper-lockfile": "^4.1.4",
     "jest": "^29.5.0",
     "ts-jest": "^29.1.0"
   }

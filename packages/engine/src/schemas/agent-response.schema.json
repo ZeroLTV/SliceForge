@@ -1,0 +1,233 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SliceForge Agent Response",
+  "oneOf": [
+    { "$ref": "#/definitions/executionResponse" },
+    { "$ref": "#/definitions/clarifierResponse" },
+    { "$ref": "#/definitions/plannerResponse" }
+  ],
+  "definitions": {
+    "status": { "enum": ["completed", "failed", "blocked"] },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "message"],
+      "properties": {
+        "severity": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string" },
+        "file": { "type": "string" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": { "type": "number", "minimum": 0 },
+        "outputTokens": { "type": "number", "minimum": 0 },
+        "estimatedCostUSD": { "type": "number", "minimum": 0 }
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "question", "recommendation"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "question": { "type": "string", "minLength": 1 },
+        "recommendation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "clarifierOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "readinessScore", "questions", "assumptions", "blockers"],
+      "properties": {
+        "kind": { "const": "clarification" },
+        "readinessScore": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "questions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": { "$ref": "#/definitions/question" }
+        },
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "blockers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "given": { "type": "string" },
+        "when": { "type": "string" },
+        "then": { "type": "string" },
+        "expected": { "type": "string" }
+      },
+      "anyOf": [{ "required": ["then"] }, { "required": ["expected"] }]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptanceId", "kind"],
+      "properties": {
+        "acceptanceId": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["test", "command", "artifact", "visual", "manual"] },
+        "source": { "type": "string" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "slice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "priority", "targets", "acceptance", "allowedPaths"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "priority": { "type": "integer", "minimum": 0 },
+        "dependsOn": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "acceptance": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/acceptance" }
+        },
+        "allowedPaths": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "requiredArtifacts": { "type": "array", "items": { "type": "string" } },
+        "requiredGates": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["artifact", "build", "lint", "unit", "integration", "e2e", "browser", "review"]
+          }
+        },
+        "docs": { "type": "array", "items": { "type": "string" } },
+        "docsImpact": { "enum": ["none", "required", "review"] },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/evidence" }
+        },
+        "retryPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxAttempts"],
+          "properties": {
+            "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 20 }
+          }
+        }
+      }
+    },
+    "plannerOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "slices", "assumptions", "risks"],
+      "properties": {
+        "kind": { "const": "plan" },
+        "slices": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/slice" }
+        },
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "risks": { "type": "array", "items": { "type": "string" } },
+        "estimatedCostUSD": { "type": "number", "minimum": 0 }
+      }
+    },
+    "executionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "status",
+        "summary",
+        "artifacts",
+        "commandsRun",
+        "diagnostics"
+      ],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "status": { "$ref": "#/definitions/status" },
+        "summary": { "type": "string" },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "commandsRun": { "type": "array", "items": { "type": "string" } },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/diagnostic" }
+        },
+        "usage": { "$ref": "#/definitions/usage" }
+      }
+    },
+    "clarifierResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "status",
+        "summary",
+        "artifacts",
+        "commandsRun",
+        "diagnostics",
+        "output"
+      ],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "status": { "$ref": "#/definitions/status" },
+        "summary": { "type": "string" },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "commandsRun": { "type": "array", "items": { "type": "string" } },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/diagnostic" }
+        },
+        "usage": { "$ref": "#/definitions/usage" },
+        "output": { "$ref": "#/definitions/clarifierOutput" }
+      }
+    },
+    "plannerResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "status",
+        "summary",
+        "artifacts",
+        "commandsRun",
+        "diagnostics",
+        "output"
+      ],
+      "properties": {
+        "protocolVersion": { "const": "1.0" },
+        "status": { "$ref": "#/definitions/status" },
+        "summary": { "type": "string" },
+        "artifacts": { "type": "array", "items": { "type": "string" } },
+        "commandsRun": { "type": "array", "items": { "type": "string" } },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/diagnostic" }
+        },
+        "usage": { "$ref": "#/definitions/usage" },
+        "output": { "$ref": "#/definitions/plannerOutput" }
+      }
+    }
+  }
+}

@@ -1,28 +1,22 @@
-# Minimal Node Example Project
+# Minimal Node Example
 
-This is a minimal demonstration project illustrating how to use SliceForge to automate developmental loops for a Node.js project.
+This fixture demonstrates SliceForge structured commands, YAML slices, worktree isolation and manual promotion.
 
-## Setup & Running
+## Run Locally
 
-1. Build SliceForge locally first:
-   ```bash
-   cd /path/to/SliceForge
-   npm run build
-   npm link
-   ```
+```bash
+cd /path/to/SliceForge
+npm ci
+npm run build
+npm link --workspace packages/engine
 
-2. Link it inside this directory:
-   ```bash
-   cd /path/to/SliceForge/examples/minimal-node
-   npm link @zeroltv/sliceforge
-   ```
+cd examples/minimal-node
+npm link @zeroltv/sliceforge
+sliceforge doctor
+sliceforge plan validate
+sliceforge run first-slice
+sliceforge status
+sliceforge promote <run-id>
+```
 
-3. Setup your API credentials in a `.env` file:
-   ```env
-   ANTHROPIC_API_KEY=your-api-key
-   ```
-
-4. Run the automation loop:
-   ```bash
-   sliceforge loop
-   ```
+Configure and authenticate the Codex CLI before `run`. SliceForge does not read an API key directly or send telemetry; the selected agent CLI owns its authentication and network behavior.
