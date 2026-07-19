@@ -1,6 +1,6 @@
 {
   "name": "@zeroltv/sliceforge",
-  "version": "1.0.0",
+  "version": "1.2.3",
   "description": "Reliable local-first AI Harness Engine for evidence-driven software delivery",
   "license": "MIT",
   "repository": {
