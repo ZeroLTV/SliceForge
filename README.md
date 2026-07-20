@@ -2,6 +2,7 @@
 
 [![CI Status](https://github.com/ZeroLTV/SliceForge/actions/workflows/ci.yml/badge.svg)](https://github.com/ZeroLTV/SliceForge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/ZeroLTV/SliceForge?style=social)](https://github.com/ZeroLTV/SliceForge)
 
 SliceForge is a reliable local-first AI Harness Engine. Each implementation runs on a dedicated Git branch and worktree; the original project is unchanged until you explicitly promote a verified commit.
 
