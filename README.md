@@ -63,7 +63,7 @@ The repository includes a CI-validated [minimal Node example](examples/minimal-n
 
 ## Star History
 
-[![Star History Chart](https://star-history.com/png?repos=ZeroLTV/SliceForge&type=Date)](https://star-history.com/#ZeroLTV/SliceForge&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ZeroLTV/SliceForge&type=Date)](https://star-history.com/#ZeroLTV/SliceForge&Date)
 
 ## License
 
