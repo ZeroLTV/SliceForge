@@ -61,6 +61,10 @@ See [Getting Started](docs/getting-started.md), [Configuration](docs/configurati
 
 The repository includes a CI-validated [minimal Node example](examples/minimal-node) with a complete config and plan.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ZeroLTV/SliceForge&type=Date)](https://star-history.com/#ZeroLTV/SliceForge&Date)
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
