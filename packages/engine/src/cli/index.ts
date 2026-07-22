@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { createRequire } from "module";
 import * as path from "path";
 import { initializeProject } from "../core/onboarding.js";
 import { loadConfig, loadPlan, validateProject } from "../core/config-loader.js";
@@ -14,6 +15,9 @@ import type { TaskRecord } from "../core/contracts.js";
 import { TaskEngine } from "../core/task-engine.js";
 import { TaskQueueEngine } from "../core/task-queue.js";
 import { EvaluationEngine } from "../core/evaluation.js";
+
+const require = createRequire(import.meta.url);
+const packageVersion = (require("../../package.json") as { version: string }).version;
 
 const orchestrator = new SliceForgeOrchestrator();
 
@@ -146,7 +150,7 @@ export function buildProgram(): Command {
   const program = new Command()
     .name("sliceforge")
     .description("SliceForge - reliable local-first AI Harness Engine")
-    .version("1.0.0");
+    .version(packageVersion);
 
   program
     .command("init")
