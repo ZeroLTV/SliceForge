@@ -27,6 +27,14 @@ Use non-interactive initialization in automation:
 sliceforge init --agent codex --yes
 ```
 
+Choose one model for all generated agent roles when the selected CLI supports model selection:
+
+```bash
+sliceforge init --agent cursor --model auto --yes
+```
+
+The model is written to `sliceforge.config.jsonc`; omitting `--model` keeps the agent CLI default.
+
 ## Validate the Environment
 
 ```bash

@@ -266,8 +266,8 @@ describe("built-in agent adapter contracts", () => {
       true,
       ["-p", "--model", "model-x", "--output-format", "json", "--permission-mode", "plan"],
     ],
-    ["cursor", false, ["-p", "--model", "model-x", "--force"]],
-    ["cursor", true, ["-p", "--model", "model-x"]],
+    ["cursor", false, ["-p", "--model", "model-x", "--force", "--trust"]],
+    ["cursor", true, ["-p", "--model", "model-x", "--trust"]],
   ] as const)(
     "constructs %s readOnly=%s arguments and protocol prompt",
     async (type, readOnly, args) => {
@@ -285,6 +285,51 @@ describe("built-in agent adapter contracts", () => {
       expect(JSON.parse(response.summary)).toEqual({ args, prompt: true, configHome: true });
     },
   );
+
+  it("accepts Cursor's string diagnostics for an execution response", async () => {
+    const root = temporaryDirectory();
+    const script = path.join(root, "cursor-compat.cjs");
+    fs.writeFileSync(
+      script,
+      `process.stdin.resume();process.stdin.on("end",()=>process.stdout.write(JSON.stringify({protocolVersion:"1.0",status:"completed",summary:"implemented",artifacts:[],commandsRun:[],diagnostics:["Cursor completed the task.","No protocol errors."]})));`,
+    );
+    const response = await new AgentProtocolRunner().run(
+      { type: "cursor", command: process.execPath, args: [script] },
+      createAgentRequest("run-cursor-compat", "implementer", root, slice, {
+        readOnly: false,
+        allowedPaths: slice.allowedPaths,
+        artifacts: [],
+        priorFailures: [],
+      }),
+      65_536,
+    );
+    expect(response.diagnostics).toEqual([
+      { severity: "warning", message: "Cursor completed the task." },
+      { severity: "warning", message: "No protocol errors." },
+    ]);
+  });
+
+  it("treats Cursor's string reviewer diagnostics as blocking errors", async () => {
+    const root = temporaryDirectory();
+    const script = path.join(root, "cursor-reviewer-compat.cjs");
+    fs.writeFileSync(
+      script,
+      `process.stdin.resume();process.stdin.on("end",()=>process.stdout.write(JSON.stringify({protocolVersion:"1.0",status:"completed",summary:"reviewed",artifacts:[],commandsRun:[],diagnostics:["Missing required coverage."]})));`,
+    );
+    const response = await new AgentProtocolRunner().run(
+      { type: "cursor", command: process.execPath, args: [script] },
+      createAgentRequest("run-cursor-reviewer-compat", "reviewer", root, slice, {
+        readOnly: true,
+        allowedPaths: slice.allowedPaths,
+        artifacts: [],
+        priorFailures: [],
+      }),
+      65_536,
+    );
+    expect(response.diagnostics).toEqual([
+      { severity: "error", message: "Missing required coverage." },
+    ]);
+  });
 });
 
 describe("structured planning agent protocol", () => {

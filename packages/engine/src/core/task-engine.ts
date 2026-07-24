@@ -40,6 +40,7 @@ import { runProcess } from "./process-runner.js";
 import { stringify as stringifyYaml } from "yaml";
 import { minimatch } from "minimatch";
 import { routeAgent, taskComplexity } from "./agent-router.js";
+import { notifyProgress, type ProgressCallback } from "./progress.js";
 
 const TASK_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   draft: new Set(["clarifying", "ready_to_plan", "cancelled", "failed"]),
@@ -72,6 +73,7 @@ export interface TaskIntakeOptions {
   targets?: string[];
   constraints?: string[];
   priority?: number;
+  onProgress?: ProgressCallback;
 }
 
 function hash(value: unknown): string {
@@ -748,6 +750,7 @@ export class TaskEngine {
     task: TaskRecord,
     role: PlanningAgentRole,
     proposal: ClarifierAgentOutput | PlannerAgentOutput,
+    onProgress?: ProgressCallback,
   ): Promise<AgentResponse | undefined> {
     const definition = routeAgent(this.config, role, {
       targets: task.request.targets,
@@ -763,6 +766,10 @@ export class TaskEngine {
     await git.createDetachedWorktree(worktreePath, baseSha);
     try {
       const before = await git.fingerprint(baseSha, worktreePath);
+      notifyProgress(
+        onProgress,
+        `${role === "clarifier" ? "Clarifier" : "Planner"} agent is working (read-only)...`,
+      );
       const response = await this.agents.run(
         definition,
         createPlanningAgentRequest(task.taskId, role, worktreePath, {
@@ -792,6 +799,10 @@ export class TaskEngine {
       }
       task.planningAgentResponses = { ...task.planningAgentResponses, [role]: response };
       this.tasks.save(task);
+      notifyProgress(
+        onProgress,
+        `${role === "clarifier" ? "Clarifier" : "Planner"} agent completed.`,
+      );
       return response;
     } finally {
       try {
@@ -802,7 +813,11 @@ export class TaskEngine {
     }
   }
 
-  private async packet(task: TaskRecord, prior?: TaskPacket): Promise<TaskPacket> {
+  private async packet(
+    task: TaskRecord,
+    prior?: TaskPacket,
+    onProgress?: ProgressCallback,
+  ): Promise<TaskPacket> {
     const base = this.deterministicPacket(task.request, prior);
     const proposal: ClarifierAgentOutput = {
       kind: "clarification",
@@ -817,7 +832,7 @@ export class TaskEngine {
       assumptions: base.assumptions,
       blockers: base.blockers,
     };
-    const response = await this.runPlanningAgent(task, "clarifier", proposal);
+    const response = await this.runPlanningAgent(task, "clarifier", proposal, onProgress);
     if (!response) return base;
     if (response.status === "failed") throw new Error(`Clarifier failed: ${response.summary}`);
     if (response.output?.kind !== "clarification") {
@@ -846,15 +861,20 @@ export class TaskEngine {
     };
   }
 
-  private async graph(task: TaskRecord): Promise<SliceGraph> {
+  private async graph(task: TaskRecord, onProgress?: ProgressCallback): Promise<SliceGraph> {
     const proposal = buildDeterministicGraph(task, this.config, this.projectRoot);
-    const response = await this.runPlanningAgent(task, "planner", {
-      kind: "plan",
-      slices: proposal.slices,
-      assumptions: proposal.assumptions,
-      risks: proposal.risks,
-      estimatedCostUSD: proposal.estimatedCostUSD,
-    });
+    const response = await this.runPlanningAgent(
+      task,
+      "planner",
+      {
+        kind: "plan",
+        slices: proposal.slices,
+        assumptions: proposal.assumptions,
+        risks: proposal.risks,
+        estimatedCostUSD: proposal.estimatedCostUSD,
+      },
+      onProgress,
+    );
     if (!response) return proposal;
     if (response.status !== "completed")
       throw new Error(`Planner ${response.status}: ${response.summary}`);
@@ -930,10 +950,11 @@ export class TaskEngine {
       request.attachments.push(await this.figmaAttachment(task, options.figma));
     }
     if (!request.request) throw new Error("Task request cannot be empty.");
+    notifyProgress(options.onProgress, "Preparing request context...");
     task.packet = this.deterministicPacket(request);
     this.tasks.save(task);
     try {
-      task.packet = await this.packet(task);
+      task.packet = await this.packet(task, undefined, options.onProgress);
       this.tasks.save(task);
     } catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
@@ -946,9 +967,10 @@ export class TaskEngine {
       this.tasks.transition(task, "clarifying", "Task needs answers before planning.", {
         blockers: task.packet.blockers,
       });
+      notifyProgress(options.onProgress, "Clarification questions are ready.");
       return task;
     }
-    return this.plan(task);
+    return this.plan(task, options.onProgress);
   }
 
   async answer(id: string, answers: Record<string, string>): Promise<TaskRecord> {
@@ -996,14 +1018,15 @@ export class TaskEngine {
     return this.plan(task);
   }
 
-  async plan(task: TaskRecord): Promise<TaskRecord> {
+  async plan(task: TaskRecord, onProgress?: ProgressCallback): Promise<TaskRecord> {
     if (!task.packet || task.packet.blockers.length)
       throw new Error("Task still has unresolved blockers.");
     if (task.status === "draft")
       this.tasks.transition(task, "ready_to_plan", "Task is ready for planning.");
     this.tasks.transition(task, "planning", "Building a validated Slice Graph.");
+    notifyProgress(onProgress, "Building and validating the Slice Graph...");
     try {
-      task.graph = await this.graph(task);
+      task.graph = await this.graph(task, onProgress);
     } catch (error) {
       task.lastError = error instanceof Error ? error.message : String(error);
       this.tasks.transition(task, "failed", "Structured planning failed validation.", {
@@ -1030,6 +1053,7 @@ export class TaskEngine {
       "Immutable plan snapshot is ready for human approval.",
       { fingerprint: task.graph.fingerprint },
     );
+    notifyProgress(onProgress, "Plan is ready for approval.");
     return task;
   }
 

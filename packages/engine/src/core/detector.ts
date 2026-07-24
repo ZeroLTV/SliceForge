@@ -423,8 +423,10 @@ export function detectProject(projectRoot: string): DetectionResult {
 export function createDefaultConfig(
   detection: DetectionResult,
   agentType: "codex" | "claude" | "cursor",
+  model?: string,
 ): SliceForgeConfig {
-  const agent = { type: agentType } as const;
+  const modelOption = model?.trim() ? { model: model.trim() } : {};
+  const agent = { type: agentType, ...modelOption } as const;
   return {
     schemaVersion: 1,
     project: detection.project,

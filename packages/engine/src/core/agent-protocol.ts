@@ -220,8 +220,8 @@ function builtInCommand(agent: AgentDefinition, request: AgentRequest): CommandS
     args:
       agent.args ??
       (request.constraints.readOnly
-        ? ["-p", ...(agent.model ? ["--model", agent.model] : [])]
-        : ["-p", ...(agent.model ? ["--model", agent.model] : []), "--force"]),
+        ? ["-p", ...(agent.model ? ["--model", agent.model] : []), "--trust"]
+        : ["-p", ...(agent.model ? ["--model", agent.model] : []), "--force", "--trust"]),
     timeoutMs: agent.timeoutMs ?? 10 * 60 * 1000,
     envAllowlist: AGENT_ENV,
   };
@@ -324,34 +324,65 @@ function findProtocolPayload(value: unknown): unknown {
   return undefined;
 }
 
-function parseBuiltInOutput(result: ProcessRunResult, role: AgentRequest["role"]): AgentResponse {
+function normalizeCursorResponse(value: unknown, role: AgentRequest["role"]): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const response = value as Record<string, unknown>;
+  const diagnostics = response.diagnostics;
+  if (Array.isArray(diagnostics)) {
+    return {
+      ...response,
+      diagnostics: diagnostics.map((item) =>
+        typeof item === "string"
+          ? { severity: role === "reviewer" ? "error" : "warning", message: item }
+          : item,
+      ),
+    };
+  }
+  if (diagnostics && typeof diagnostics === "object") {
+    return {
+      ...response,
+      diagnostics: Object.keys(diagnostics).length === 0 ? [] : [diagnostics],
+    };
+  }
+  return value;
+}
+
+function parseBuiltInOutput(
+  result: ProcessRunResult,
+  role: AgentRequest["role"],
+  cursorAdapter: boolean,
+): AgentResponse {
   const markerCount = [result.stdout, result.stderr].reduce(
     (count, value) => count + (value.match(/SLICEFORGE_RESPONSE_JSON=/g)?.length ?? 0),
     0,
   );
   if (markerCount > 1) throw new Error("Agent emitted more than one SliceForge protocol response.");
   const candidates = [result.stdout, result.stderr];
+  const validateCandidate = (value: unknown): AgentResponse =>
+    validateResponse(cursorAdapter ? normalizeCursorResponse(value, role) : value, role);
   for (const candidate of candidates) {
     const direct = candidate.trim();
     if (direct) {
       try {
         const parsed = parseStrictJson(direct);
         try {
-          return validateResponse(parsed, role);
+          return validateCandidate(parsed);
         } catch {
           const nested = findProtocolPayload(parsed);
-          if (nested !== undefined) return validateResponse(nested, role);
+          if (nested !== undefined) return validateCandidate(nested);
         }
       } catch {
         const nested = findProtocolPayload(candidate);
-        if (nested !== undefined) return validateResponse(nested, role);
+        if (nested !== undefined) return validateCandidate(nested);
       }
     }
     for (const line of candidate.split(/\r?\n/).reverse()) {
       try {
         const parsed = parseStrictJson(line);
         const nested = findProtocolPayload(parsed);
-        if (nested !== undefined) return validateResponse(nested, role);
+        if (nested !== undefined) return validateCandidate(nested);
       } catch {
         // Continue searching event-stream lines.
       }
@@ -438,7 +469,7 @@ export class AgentProtocolRunner {
     }
     return definition.type === "command"
       ? validateResponse(parseStrictJson(result.stdout), request.role)
-      : parseBuiltInOutput(result, request.role);
+      : parseBuiltInOutput(result, request.role, definition.type === "cursor");
   }
 }
 

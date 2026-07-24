@@ -35,6 +35,59 @@ function classifyError(error: unknown): ExitCode {
   return ExitCode.InternalError;
 }
 
+interface ProgressReporter {
+  update(message: string): void;
+  done(message: string): void;
+  fail(message: string): void;
+}
+
+function formatElapsed(durationMs: number): string {
+  const seconds = Math.floor(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function createProgressReporter(): ProgressReporter {
+  const startedAt = Date.now();
+  const interactive = process.stderr.isTTY === true;
+  const frames = ["-", "\\", "|", "/"];
+  let frame = 0;
+  let current = "";
+  let timer: NodeJS.Timeout | undefined;
+
+  const render = (): void => {
+    if (!interactive) return;
+    process.stderr.write(
+      `\r\x1b[2K${frames[frame]} ${current} (${formatElapsed(Date.now() - startedAt)})`,
+    );
+    frame = (frame + 1) % frames.length;
+  };
+
+  const update = (message: string): void => {
+    if (message === current) return;
+    current = message;
+    if (!interactive) {
+      process.stderr.write(`[SliceForge] ${message}\n`);
+      return;
+    }
+    render();
+    timer ??= setInterval(render, 120);
+  };
+
+  const stop = (message: string): void => {
+    if (timer) clearInterval(timer);
+    timer = undefined;
+    if (interactive) process.stderr.write(`\r\x1b[2K`);
+    process.stderr.write(`[SliceForge] ${message} (${formatElapsed(Date.now() - startedAt)})\n`);
+  };
+
+  return {
+    update,
+    done: (message) => stop(message),
+    fail: (message) => stop(message),
+  };
+}
+
 async function action(task: () => Promise<void>): Promise<void> {
   try {
     await task();
@@ -99,6 +152,12 @@ function parseAgent(value: string): "codex" | "claude" | "cursor" {
   return value as "codex" | "claude" | "cursor";
 }
 
+function parseModel(value: string): string {
+  const model = value.trim();
+  if (!model) throw new Error("Invalid model: value cannot be empty.");
+  return model;
+}
+
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
@@ -156,12 +215,15 @@ export function buildProgram(): Command {
     .command("init")
     .description("Detect the project and create JSONC/YAML configuration")
     .option("--agent <agent>", "codex | claude | cursor")
+    .option("--model <model>", "model identifier applied to generated agent roles")
     .option("-y, --yes", "accept detected defaults without prompts")
     .option("--force", "replace existing config and plan")
     .action((options) =>
       action(async () => {
+        const model = options.model ? parseModel(options.model) : undefined;
         const result = await initializeProject(process.cwd(), {
           agent: options.agent ? parseAgent(options.agent) : undefined,
+          ...(model ? { model } : {}),
           yes: Boolean(options.yes),
           force: Boolean(options.force),
         });
@@ -218,20 +280,31 @@ export function buildProgram(): Command {
     .option("--priority <number>", "queue priority; lower values run first", "50")
     .action((request, options) =>
       action(async () => {
-        const engine = await TaskEngine.open(process.cwd());
-        const task = await engine.create(request, {
-          from: options.from,
-          images: options.image,
-          figma: options.figma,
-          targets: options.target,
-          constraints: options.constraint,
-          priority: Number(options.priority),
-        });
-        printTask(task);
-        console.log(
-          `Report:    ${new HtmlReporter(engine.runtime).writeTask(task, engine.tasks.events(task.taskId))}`,
-        );
-        if (task.status === "clarifying") process.exitCode = ExitCode.Blocked;
+        const progress = createProgressReporter();
+        progress.update("Starting task intake...");
+        let intakeComplete = false;
+        try {
+          const engine = await TaskEngine.open(process.cwd());
+          const task = await engine.create(request, {
+            from: options.from,
+            images: options.image,
+            figma: options.figma,
+            targets: options.target,
+            constraints: options.constraint,
+            priority: Number(options.priority),
+            onProgress: progress.update,
+          });
+          progress.done("Task intake complete");
+          intakeComplete = true;
+          printTask(task);
+          console.log(
+            `Report:    ${new HtmlReporter(engine.runtime).writeTask(task, engine.tasks.events(task.taskId))}`,
+          );
+          if (task.status === "clarifying") process.exitCode = ExitCode.Blocked;
+        } catch (error) {
+          if (!intakeComplete) progress.fail("Task intake stopped");
+          throw error;
+        }
       }),
     );
 
@@ -342,11 +415,21 @@ export function buildProgram(): Command {
         const concurrency =
           options.concurrency === undefined ? undefined : Number(options.concurrency);
         const runCycle = async (): Promise<void> => {
-          const result = await queue.start(concurrency);
-          console.log(
-            `Processed: ${result.processed.length}  Ready: ${result.readyToPromote.length}  Failed: ${result.failed.length}`,
-          );
-          if (result.failed.length) process.exitCode = ExitCode.GateFailed;
+          const progress = createProgressReporter();
+          progress.update("Starting queue...");
+          let cycleComplete = false;
+          try {
+            const result = await queue.start(concurrency, progress.update);
+            progress.done("Queue cycle complete");
+            cycleComplete = true;
+            console.log(
+              `Processed: ${result.processed.length}  Ready: ${result.readyToPromote.length}  Failed: ${result.failed.length}`,
+            );
+            if (result.failed.length) process.exitCode = ExitCode.GateFailed;
+          } catch (error) {
+            if (!cycleComplete) progress.fail("Queue cycle stopped");
+            throw error;
+          }
         };
         await runCycle();
         if (options.watch) {

@@ -6,6 +6,7 @@ import { SliceForgeOrchestrator } from "./orchestrator.js";
 import { atomicWrite } from "./runtime-store.js";
 import { sliceGraphFingerprint, TaskEngine } from "./task-engine.js";
 import { GitService } from "./git-service.js";
+import { notifyProgress, type ProgressCallback } from "./progress.js";
 
 interface QueueControl {
   paused: boolean;
@@ -441,7 +442,7 @@ export class TaskQueueEngine {
     return bundle.run;
   }
 
-  async start(concurrency?: number): Promise<QueueRunResult> {
+  async start(concurrency?: number, onProgress?: ProgressCallback): Promise<QueueRunResult> {
     if (this.control().paused) throw new Error("Queue is paused. Run 'sliceforge queue resume'.");
     await this.recoverExpiredLeases();
     const limit = concurrency ?? this.engine.config.execution?.concurrency ?? 1;
@@ -455,6 +456,11 @@ export class TaskQueueEngine {
         (a, b) => a.request.priority - b.request.priority || a.createdAt.localeCompare(b.createdAt),
       );
     const result: QueueRunResult = { processed: [], readyToPromote: [], failed: [] };
+    const workerCount = Math.min(limit, candidates.length);
+    notifyProgress(
+      onProgress,
+      `Found ${candidates.length} queued task(s); using ${workerCount} worker(s).`,
+    );
     let cursor = 0;
     const worker = async (index: number): Promise<void> => {
       const workerId = `${process.pid}-${index}-${crypto.randomBytes(3).toString("hex")}`;
@@ -467,6 +473,7 @@ export class TaskQueueEngine {
         }
         if (!claimed?.graph) continue;
         result.processed.push(claimed.taskId);
+        notifyProgress(onProgress, `Running ${claimed.taskId}...`);
         const heartbeatMs = Math.max(
           1000,
           Math.floor((this.engine.config.execution?.leaseMs ?? 60_000) / 3),
@@ -481,8 +488,10 @@ export class TaskQueueEngine {
           const finalTask = this.engine.tasks.load(claimed.taskId);
           if (bundle && finalTask.status === "ready_to_promote") {
             result.readyToPromote.push(claimed.taskId);
+            notifyProgress(onProgress, `${claimed.taskId} is ready to promote.`);
           } else {
             result.failed.push(claimed.taskId);
+            notifyProgress(onProgress, `${claimed.taskId} failed validation.`);
           }
         } catch (error) {
           await this.withQueueLock(async () => {
@@ -494,14 +503,13 @@ export class TaskQueueEngine {
             });
           });
           result.failed.push(claimed.taskId);
+          notifyProgress(onProgress, `${claimed.taskId} failed during execution.`);
         } finally {
           clearInterval(heartbeat);
         }
       }
     };
-    await Promise.all(
-      Array.from({ length: Math.min(limit, candidates.length) }, (_, index) => worker(index)),
-    );
+    await Promise.all(Array.from({ length: workerCount }, (_, index) => worker(index)));
     return result;
   }
 

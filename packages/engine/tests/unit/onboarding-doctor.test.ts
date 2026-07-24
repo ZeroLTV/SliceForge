@@ -41,6 +41,28 @@ describe("onboarding", () => {
     );
     expect(validateProject(root).plan.slices).toHaveLength(1);
   });
+
+  it("stores a Cursor model once and leaves role arguments to the adapter", async () => {
+    const root = temporaryRoot();
+    fs.writeFileSync(path.join(root, "README.md"), "Cursor fixture\n");
+    const initialized = await initializeProject(root, {
+      agent: "cursor",
+      model: "gpt-5-codex",
+      yes: true,
+    });
+
+    expect(initialized.config.agents).toMatchObject({
+      clarifier: { type: "cursor", model: "gpt-5-codex" },
+      planner: { type: "cursor", model: "gpt-5-codex" },
+      implementer: { type: "cursor", model: "gpt-5-codex" },
+      testgen: { type: "cursor", model: "gpt-5-codex" },
+      reviewer: { type: "cursor", model: "gpt-5-codex" },
+    });
+    for (const agent of Object.values(initialized.config.agents)) {
+      expect(agent).not.toHaveProperty("args");
+    }
+    expect(validateProject(root).plan.slices).toHaveLength(1);
+  });
 });
 
 describe("doctor", () => {

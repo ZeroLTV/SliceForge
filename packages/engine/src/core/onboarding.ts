@@ -8,6 +8,7 @@ import { validateDocuments } from "./config-loader.js";
 
 export interface InitOptions {
   agent?: "codex" | "claude" | "cursor";
+  model?: string;
   yes?: boolean;
   force?: boolean;
 }
@@ -128,7 +129,7 @@ export async function initializeProject(
     if (!accepted) throw new Error("Initialization cancelled before writing files.");
   }
   const agent = await chooseAgent(projectRoot, options);
-  const config = createDefaultConfig(detection, agent);
+  const config = createDefaultConfig(detection, agent, options.model);
   const plan: SliceForgePlan = { schemaVersion: 1, slices: [initialSlice(config)] };
   validateDocuments(projectRoot, config, plan);
   writeProjectFiles(

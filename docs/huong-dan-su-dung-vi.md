@@ -42,6 +42,14 @@ Non-interactive:
 sliceforge init --agent codex --yes
 ```
 
+Chọn model dùng chung cho các role khi agent CLI hỗ trợ chọn model:
+
+```bash
+sliceforge init --agent cursor --model auto --yes
+```
+
+Model được ghi vào `sliceforge.config.jsonc`; nếu bỏ qua `--model`, agent sẽ dùng model mặc định.
+
 Lệnh này tự phát hiện stack và tạo:
 
 - sliceforge.config.jsonc: agent, target, command, gate, policy và report.
@@ -90,7 +98,12 @@ Nếu muốn chỉ định model hoặc dùng binary khác:
 ```jsonc
 {
   "agents": {
-    "implementer": { "type": "codex", "command": "codex", "model": "gpt-5-codex", "timeoutMs": 600000 },
+    "implementer": {
+      "type": "codex",
+      "command": "codex",
+      "model": "gpt-5-codex",
+      "timeoutMs": 600000,
+    },
   },
 }
 ```
@@ -125,7 +138,7 @@ Biến môi trường `ANTHROPIC_API_KEY` được tự động đưa vào allow
 
 ### 3.3. Cursor Agent
 
-Adapter tích hợp gọi lệnh `cursor-agent`. Ở chế độ ghi dùng `-p --force`; ở chế độ chỉ đọc dùng `-p`.
+Adapter tích hợp gọi lệnh `cursor-agent`. Ở chế độ ghi dùng `-p --force --trust`; ở chế độ chỉ đọc dùng `-p --trust` để worktree cô lập được Cursor tin cậy tự động.
 
 ```jsonc
 {
@@ -214,10 +227,10 @@ Ví dụ thực tế: dùng **Codex** viết code, **Kilo Code** (qua wrapper) v
       "command": "node",
       "args": ["kilo-wrapper.mjs"],
       "capabilities": ["testgen"],
-      "timeoutMs": 600000
+      "timeoutMs": 600000,
     },
-    "reviewer": { "type": "cursor" }
-  }
+    "reviewer": { "type": "cursor" },
+  },
 }
 ```
 
@@ -233,9 +246,9 @@ Hoặc nếu muốn cả ba agent đều tham gia đầy đủ (Codex implement,
       "type": "command",
       "command": "node",
       "args": ["kilo-wrapper.mjs"],
-      "capabilities": ["testgen"]
-    }
-  }
+      "capabilities": ["testgen"],
+    },
+  },
 }
 ```
 
@@ -457,8 +470,8 @@ Khai báo prepare ở target:
   "prepare": {
     "command": "npm",
     "args": ["ci"],
-    "timeoutMs": 600000
-  }
+    "timeoutMs": 600000,
+  },
 }
 ```
 

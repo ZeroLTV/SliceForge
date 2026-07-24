@@ -265,7 +265,7 @@ describe("CLI actions", () => {
       failed: ["task-1"],
     });
     await runCommand("queue", "start", "--concurrency", "2");
-    expect(mockQueueEngine.start).toHaveBeenCalledWith(2);
+    expect(mockQueueEngine.start).toHaveBeenCalledWith(2, expect.any(Function));
     expect(process.exitCode).toBe(ExitCode.GateFailed);
 
     process.exitCode = undefined;

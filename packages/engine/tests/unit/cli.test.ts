@@ -106,6 +106,7 @@ describe("SliceForge CLI contract", () => {
     expect(registeredOptions).toEqual(
       expect.arrayContaining([
         "--agent <agent>",
+        "--model <model>",
         "-y, --yes",
         "--force",
         "--json",
